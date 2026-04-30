@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+*.db
+.env
+src/desktop/build/
+src/desktop/.dart_tool/
