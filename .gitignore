@@ -1,7 +1,22 @@
+# Python
 venv/
 __pycache__/
 *.pyc
-*.db
+*.pyo
+*.pyd
 .env
+
+# Database — contains personal biometric data, not committed
+*.db
+
+# Flutter build artifacts
 src/desktop/build/
 src/desktop/.dart_tool/
+src/desktop/.idea/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
