@@ -135,9 +135,14 @@ class ValenceArousalPredictor:
         """
         if self._available is None:
             self._load()
-        if not self._available:
+        if not self._available or self._model is None:
             return None
-        if face_bgr is None or face_bgr.size == 0:
+
+        # Guard against None, empty, or too-small crops
+        if face_bgr is None or face_bgr.ndim < 3 or face_bgr.size == 0:
+            return None
+        h, w = face_bgr.shape[:2]
+        if h < 16 or w < 16:
             return None
 
         try:
@@ -158,11 +163,14 @@ class ValenceArousalPredictor:
             )
 
             # ── Inference ─────────────────────────────────────────────────────
+            # Do NOT pass reset_smoothing=True: the model is instantiated with
+            # temporal_smoothing=False, so self.temporal_state is never
+            # initialised and accessing it would raise AttributeError.
             with torch.no_grad():
-                output = self._model(tensor, reset_smoothing=True)
+                output = self._model(tensor)
 
-            valence = float(output["valence"].clamp(-1.0, 1.0).cpu().item())
-            arousal = float(output["arousal"].clamp(-1.0, 1.0).cpu().item())
+            valence = float(output["valence"].squeeze().clamp(-1.0, 1.0).cpu().item())
+            arousal = float(output["arousal"].squeeze().clamp(-1.0, 1.0).cpu().item())
 
             return round(valence, 3), round(arousal, 3)
 
@@ -265,7 +273,12 @@ class ValenceArousalPredictor:
             state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
             net.load_state_dict(state_dict, strict=False)
 
-            self._model = net.to(self._device).eval()
+            # Move to device first, then call eval() separately.
+            # EmoNet overrides eval() without returning self, so chaining
+            # net.to(device).eval() would assign None to self._model.
+            net = net.to(self._device)
+            net.eval()
+            self._model = net
             print(f"[VA] EmoNet-8 ready — valence/arousal active.")
             return True
 
