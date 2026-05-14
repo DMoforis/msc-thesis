@@ -272,17 +272,23 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                         sqi = float(result.get("SQI") or 0.0)
                         hrv = result.get("hrv") or {}   # empty if SQI ≤ 0.5
 
-                        rmssd = hrv.get("rmssd")
-                        sdnn  = hrv.get("sdnn")
-                        lf_hf = hrv.get("LF/HF")
+                        rmssd_raw = hrv.get("rmssd")
+                        sdnn_raw  = hrv.get("sdnn")
+                        lf_hf     = hrv.get("LF/HF")
+
+                        # Sanity-check HRV metrics — noisy rPPG can produce
+                        # physiologically impossible values (e.g. RMSSD > 1000 ms).
+                        # Normal human range: RMSSD 5–200 ms, SDNN 5–250 ms.
+                        rmssd = round(rmssd_raw, 1) if (rmssd_raw and 5.0 < rmssd_raw < 200.0) else None
+                        sdnn  = round(sdnn_raw,  1) if (sdnn_raw  and 5.0 < sdnn_raw  < 250.0) else None
 
                         if 30.0 < hr < 220.0:
                             save_reading(
                                 conn,
                                 heart_rate    = round(hr, 1),
-                                rmssd         = round(rmssd, 1) if rmssd else None,
-                                lf_hf         = round(lf_hf, 2)  if lf_hf  else None,
-                                sdnn          = round(sdnn, 1)  if sdnn  else None,
+                                rmssd         = rmssd,
+                                lf_hf         = round(lf_hf, 2) if lf_hf else None,
+                                sdnn          = sdnn,
                                 signal_quality = round(sqi, 2),
                                 window_type   = "hrv_5min",
                             )
@@ -290,10 +296,10 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                             print(f"  [HRV 5-min window]")
                             print(f"  Heart Rate    : {round(hr, 1):.1f} BPM")
                             print(f"  RMSSD         : "
-                                  f"{round(rmssd, 1):.1f} ms" if rmssd else
-                                  f"  RMSSD         : — (SQI too low)")
+                                  f"{rmssd:.1f} ms" if rmssd else
+                                  f"  RMSSD         : — (SQI too low or out of range)")
                             print(f"  SDNN          : "
-                                  f"{round(sdnn, 1):.1f} ms" if sdnn else
+                                  f"{sdnn:.1f} ms" if sdnn else
                                   f"  SDNN          : —")
                             print(f"  LF/HF         : "
                                   f"{round(lf_hf, 2):.2f}" if lf_hf else

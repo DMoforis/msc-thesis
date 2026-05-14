@@ -154,10 +154,16 @@ def fetch_desktop_window(
     start: datetime,
     end: datetime,
 ) -> list:
-    """Return desktop_readings rows in the half-open interval [start, end)."""
+    """Return desktop_readings rows in the half-open interval [start, end).
+
+    REPLACE normalises ISO 8601 T-separator timestamps written by Flutter
+    (e.g. '2026-05-14T11:25:53') to match the space-separator format produced
+    by Python's strftime. Without this, 'T' (ASCII 84) > ' ' (ASCII 32) causes
+    every T-format row to compare as "after" the window's upper bound.
+    """
     return conn.execute("""
         SELECT * FROM desktop_readings
-        WHERE timestamp >= ? AND timestamp < ?
+        WHERE REPLACE(timestamp, 'T', ' ') >= ? AND REPLACE(timestamp, 'T', ' ') < ?
         ORDER BY timestamp
     """, (_fmt(start), _fmt(end))).fetchall()
 
