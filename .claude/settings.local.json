@@ -22,7 +22,8 @@
       "Bash(venv/Scripts/python.exe export_excel.py)",
       "Bash(venv/Scripts/pip install *)",
       "Bash(venv/Scripts/python.exe export_excel.py --last 1)",
-      "Bash(venv/Scripts/python.exe export_excel.py --date 2026-05-14)"
+      "Bash(venv/Scripts/python.exe export_excel.py --date 2026-05-14)",
+      "Bash(python src/fusion/late_fusion.py)"
     ],
     "additionalDirectories": [
       "c:\\Users\\dimit\\Desktop\\msc_thesis\\stress_detection\\src"

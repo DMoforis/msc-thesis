@@ -45,8 +45,11 @@ AROUSAL_LOW_THRESHOLD      = 0.2    # disengagement sustained ≥ 15 min
 MIN_MINUTES_BETWEEN_NOTIFS = 15     # cooldown between notifications
 
 # ── Ollama LLM ────────────────────────────────────────────────────────────────
-OLLAMA_MODEL   = "llama3.2:8b"
+OLLAMA_MODEL   = "llama3.1:8b"
 OLLAMA_TIMEOUT = 2   # seconds; fall back to keyword matching if exceeded
+
+# ── Baseline calibration ─────────────────────────────────────────────────────
+BASELINE_DURATION_SECONDS = 120   # 2-minute resting calibration session
 
 # ── Face landmark detection ───────────────────────────────────────────────────
 EAR_THRESHOLD    = 0.21   # below this → eye considered closed (Soukupova & Cech 2016)

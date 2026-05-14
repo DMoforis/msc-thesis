@@ -20,8 +20,10 @@ remaining weights are renormalised.
 
 Baselines
 ---------
-Physiological baselines default to population means. They should be replaced
-with personal baselines once a calibration session is available.
+Physio and face scores are computed as deviations from the user's personal
+baseline (loaded from the baselines table at construction time). Population
+means are used when no calibration session has been run yet.
+Run: python src/utils/baseline.py --calibrate
 """
 
 import os
@@ -33,19 +35,22 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from src.utils.config import W_PHYSIO, W_FACE, W_DESKTOP, EAR_THRESHOLD
+from src.utils.baseline import get_baseline
 
-# ── Population-mean physiological baselines ───────────────────────────────────
-_BASELINE_HR     = 70.0    # BPM — typical resting HR for healthy adults
-_BASELINE_RMSSD  = 40.0    # ms  — median RMSSD for healthy adults at rest
-_MAX_HR_DELTA    = 30.0    # BPM deviation above baseline that maps to score 1.0
+# HR sensitivity: BPM deviation above personal baseline that maps to score 1.0
+_MAX_HR_DELTA = 30.0
 
-# Desktop score calibration
-_HIGH_WINDOW_SWITCHES = 20  # switches per 5-min window → maps to score 1.0
+# Desktop score calibration (not personal — attention fragmentation constant)
+_HIGH_WINDOW_SWITCHES = 20  # switches per 5-min window → score 1.0
 
 
 class LateFusion:
     """
     Combines per-modality stress scores into a single stress_index.
+
+    Physio and face scores are computed relative to the user's personal
+    resting baseline (HR, RMSSD, valence, arousal). Call reload_baseline()
+    after running a new calibration session to pick up updated values.
 
     Usage
     -----
@@ -57,6 +62,13 @@ class LateFusion:
     data was unavailable — the modality is then excluded and weights are
     renormalised over the remaining modalities.
     """
+
+    def __init__(self) -> None:
+        self._baseline = get_baseline()
+
+    def reload_baseline(self) -> None:
+        """Reload personal baseline from DB (call after a new calibration)."""
+        self._baseline = get_baseline()
 
     def score(
         self,
@@ -100,51 +112,65 @@ class LateFusion:
     def _physio_score(self, physio: dict) -> float | None:
         """
         Physio stress score in [0, 1].
-        Combines HR elevation above baseline and RMSSD suppression below baseline.
+        HR elevation above personal baseline + RMSSD suppression below baseline.
         """
         hr    = physio.get("avg_hr")
         rmssd = physio.get("avg_rmssd")
 
+        b_hr    = self._baseline["hr"]
+        b_rmssd = self._baseline["rmssd"]
+
         subscores: list[float] = []
 
         if hr is not None:
-            # Linear ramp: no elevation → 0.0, +30 BPM above baseline → 1.0
-            delta = max(0.0, hr - _BASELINE_HR)
+            # Linear ramp: no elevation → 0.0, +_MAX_HR_DELTA BPM above baseline → 1.0
+            delta = max(0.0, hr - b_hr)
             subscores.append(min(1.0, delta / _MAX_HR_DELTA))
 
         if rmssd is not None and rmssd > 0:
-            # Low RMSSD = sympathetic dominance = stress.
-            # Score 1.0 at RMSSD→0, score 0.0 at RMSSD ≥ 2×baseline (80 ms).
-            subscores.append(max(0.0, 1.0 - rmssd / (_BASELINE_RMSSD * 2.0)))
+            # Score 1.0 at RMSSD→0, score 0.0 at RMSSD ≥ 2× personal baseline.
+            subscores.append(max(0.0, 1.0 - rmssd / (b_rmssd * 2.0)))
 
         return sum(subscores) / len(subscores) if subscores else None
 
     def _face_score(self, face: dict) -> float | None:
         """
         Face stress score in [0, 1].
-        Combines negative valence, arousal deviation from neutral, and low EAR.
+        Valence drop below personal baseline + arousal deviation from personal
+        resting level + low EAR (fixed physiological threshold).
         """
         valence = face.get("avg_valence")
         arousal = face.get("avg_arousal")
         ear     = face.get("avg_ear")
 
+        b_valence = self._baseline["valence"]
+        b_arousal = self._baseline["arousal"]
+
         subscores: list[float] = []
         weights:   list[float] = []
 
         if valence is not None:
-            # valence in [-1, 1]: -1 → score 1.0, +1 → score 0.0
-            subscores.append((1.0 - valence) / 2.0)
+            # Drop below personal resting valence → stress signal.
+            # Normalised by available room below the baseline (down to -1.0).
+            denom = 1.0 + b_valence   # distance from personal baseline to minimum
+            if denom > 0.01:
+                v_score = max(0.0, min(1.0, (b_valence - valence) / denom))
+            else:
+                v_score = max(0.0, min(1.0, b_valence - valence))
+            subscores.append(v_score)
             weights.append(1.0)
 
         if arousal is not None:
-            # High arousal (anxiety) AND very low arousal (disengagement) both
-            # deviate from the neutral baseline → use absolute value.
-            subscores.append(abs(arousal))
+            # Deviation from personal resting arousal — both high (anxiety) and
+            # very low (disengagement) are informative stress signals.
+            # Arousal range is [-1, 1], so a deviation of 1.0 is substantial.
+            a_score = min(1.0, abs(arousal - b_arousal))
+            subscores.append(a_score)
             weights.append(1.0)
 
         if ear is not None:
-            # Sustained low EAR indicates eye strain or fatigue.
-            # Only contributes when below the blink/closure threshold.
+            # Sustained low EAR = eye strain / fatigue.
+            # Uses fixed physiological threshold (Soukupova & Cech 2016), not personal.
             ear_s = max(0.0, 1.0 - ear / EAR_THRESHOLD) if ear < EAR_THRESHOLD else 0.0
             subscores.append(ear_s)
             weights.append(0.5)   # lower weight — indirect indicator

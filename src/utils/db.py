@@ -44,6 +44,23 @@ def open_db(db_path: str = DB_PATH) -> sqlite3.Connection:
 # TABLE CREATION
 # ─────────────────────────────────────────────────────────────────────────────
 
+def ensure_baselines_table(conn: sqlite3.Connection) -> None:
+    """Create the baselines table if it does not already exist."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS baselines (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp   TEXT NOT NULL,
+            hr          REAL,
+            rmssd       REAL,
+            ear         REAL,
+            blink_rate  REAL,
+            valence     REAL,
+            arousal     REAL
+        )
+    """)
+    conn.commit()
+
+
 def ensure_aggregated_windows_table(conn: sqlite3.Connection) -> None:
     """Create aggregated_windows table if it does not already exist."""
     conn.execute("""
