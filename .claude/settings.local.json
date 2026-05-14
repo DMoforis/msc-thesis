@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import rppg; import inspect; print\\(inspect.getfile\\(rppg\\)\\)\")",
+      "Bash(python -c \"import rppg; import inspect; members = inspect.getmembers\\(rppg.Model\\); [print\\(m[0]\\) for m in members if not m[0].startswith\\('__'\\)]\")",
+      "Bash(python -c \"import rppg, inspect; print\\(inspect.getsource\\(rppg.Model.update_frame\\)\\); print\\('---'\\); print\\(inspect.getsource\\(rppg.Model.update_face_resized\\)\\)\")",
+      "Bash(python -c \"import rppg, inspect; print\\(inspect.getsource\\(rppg.Model.video_capture\\)\\); print\\('==='\\); print\\(inspect.getsource\\(rppg.Model.__init__\\)\\)\")",
+      "Bash(python -c \"import rppg, inspect; print\\(inspect.getsource\\(rppg.Model._Model__process_video_capture\\)\\)\")",
+      "Bash(mkdir -p c:/Users/dimit/Desktop/msc_thesis/stress_detection/src/utils c:/Users/dimit/Desktop/msc_thesis/stress_detection/src/camera 2>/dev/null; echo done)",
+      "Bash(venv/Scripts/python.exe -c ' *)",
+      "Bash(ollama --version)",
+      "PowerShell(ollama --version 2>&1; if \\($LASTEXITCODE -ne 0\\) { \"NOT FOUND \\(exit $LASTEXITCODE\\)\" })",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(venv/Scripts/python.exe src/llm/classifier.py)",
+      "Bash(venv/Scripts/python.exe src/fusion/late_fusion.py)",
+      "Bash(venv/Scripts/python.exe src/fusion/aggregator.py --once)",
+      "Bash(venv/Scripts/python.exe -c \"import sqlite3; conn = sqlite3.connect\\('data/stress_monitor.db'\\); print\\([r[0] for r in conn.execute\\(\\\\\"SELECT name FROM sqlite_master WHERE type='table'\\\\\"\\).fetchall\\(\\)]\\)\")",
+      "Bash(venv/Scripts/python.exe src/llm/recommender.py)",
+      "Bash(venv/Scripts/python.exe src/wellbeing/notifier.py)",
+      "Bash(venv/Scripts/python.exe export_excel.py)",
+      "Bash(venv/Scripts/pip install *)",
+      "Bash(venv/Scripts/python.exe export_excel.py --last 1)",
+      "Bash(venv/Scripts/python.exe export_excel.py --date 2026-05-14)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\dimit\\Desktop\\msc_thesis\\stress_detection\\src"
+    ]
+  }
+}

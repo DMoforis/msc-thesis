@@ -1,28 +1,26 @@
 """
 rppg_monitor.py
 ---------------
-Hello World proof-of-concept #1 — Physiological signals via rPPG.
+Physiological signals via rPPG — Phase 2 (shared-feed refactor).
 MSc Thesis — Dimitris Moforis, University of Piraeus, Dept. of Digital Systems
 
-What this script does:
-  1. Opens the webcam using open-rppg's real-time pipeline
-  2. Every WINDOW_SECONDS, reads Heart Rate from the model
-  3. Computes RMSSD and LF/HF independently using neurokit2 on the raw BVP signal
-     (more reliable than asking open-rppg for HRV directly at short windows)
-  4. Saves each reading to a local SQLite database with a timestamp
-  5. Shuts down cleanly when Q is pressed, suppressing open-rppg's thread noise
-
-Fixes from v1:
-  - HRV (RMSSD, LF/HF) now computed via neurokit2 on the raw BVP waveform
-    rather than relying on open-rppg's internal HRV output, which needs a
-    longer buffer than 30s to return non-zero values
-  - Thread RuntimeError on quit is suppressed cleanly using a stop event
-    and by wrapping the camera loop exit in a try/except
+Changes from Phase 1 (PoC #1):
+  - No longer opens the camera directly; receives frames from SharedCameraFeed.
+    This resolves the exclusive webcam access conflict with face_monitor.py.
+  - HR reading frequency: every 10 s (was 30 s) per supervisor feedback.
+  - HRV computed from a 5-minute rolling buffer (was 30 s — too short for LF/HF).
+  - Two row types in physio_readings: 'hr_10s' and 'hrv_5min'.
+  - HRV metrics (RMSSD, SDNN, LF/HF) come from open-rppg's built-in heartpy
+    pipeline rather than a separate neurokit2 pass.
+  - DB schema updated to match SPEC Section 2 (adds sdnn, window_type columns).
+  - All config constants imported from src/utils/config.py.
 
 Dependencies:
-  pip install open-rppg opencv-python numpy neurokit2
+  pip install open-rppg opencv-python numpy
 """
 
+import sys
+import os
 import time
 import sqlite3
 import threading
@@ -30,33 +28,35 @@ from datetime import datetime
 
 import cv2
 import numpy as np
-import neurokit2 as nk   # HRV analysis toolkit — we use this for RMSSD and LF/HF
-
 import rppg
 
+# ── Path bootstrap (allows running as a script from any directory) ────────────
+_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
-
-WEBCAM_INDEX   = 1      # change to 1 if index 0 doesn't open your webcam
-WINDOW_SECONDS = 30     # seconds of signal per reading
-DB_PATH        = "data/stress_monitor.db"
-PRINT_INTERVAL = 5      # seconds between "still running" status messages
-RPPG_MODEL     = "FacePhys.rlap"
-SAMPLING_RATE  = 30     # assumed webcam FPS — used by neurokit2 for HRV math
+from src.camera.shared_feed import SharedCameraFeed
+from src.utils.config import (
+    DB_PATH, CAMERA_INDEX, CAMERA_FPS,
+    HR_WINDOW_SECONDS, HRV_WINDOW_SECONDS,
+    RPPG_MODEL,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DATABASE LAYER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def init_database(db_path: str) -> sqlite3.Connection:
+def init_database(db_path: str = DB_PATH) -> sqlite3.Connection:
     """
-    Open or create the SQLite database and ensure the physio table exists.
-    This is the same table structure as v1, unchanged — existing data is safe.
+    Open (or create) the shared SQLite database and ensure the physio_readings
+    table matches the Phase 2 schema.
+
+    Migration strategy: use ALTER TABLE to add new columns if they don't exist,
+    so existing Phase 1 data is preserved.
     """
     conn = sqlite3.connect(db_path)
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS physio_readings (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,205 +64,148 @@ def init_database(db_path: str) -> sqlite3.Connection:
             heart_rate     REAL,
             rmssd          REAL,
             lf_hf_ratio    REAL,
+            sdnn           REAL,
             signal_quality REAL,
-            modality       TEXT DEFAULT 'rppg_face'
+            window_type    TEXT
         )
     """)
     conn.commit()
-    print(f"[DB] Database ready → {db_path}")
+
+    # Add new Phase 2 columns to tables created by Phase 1 (safe no-ops if
+    # they already exist — SQLite raises OperationalError, which we swallow).
+    for column_def in ("sdnn REAL", "window_type TEXT"):
+        try:
+            conn.execute(f"ALTER TABLE physio_readings ADD COLUMN {column_def}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass   # column already exists
+
+    print(f"[DB] physio_readings table ready → {db_path}")
     return conn
 
 
-def save_reading(conn, heart_rate, rmssd, lf_hf, signal_quality):
-    """Insert one physiological reading. Called every WINDOW_SECONDS."""
+def save_reading(
+    conn: sqlite3.Connection,
+    heart_rate: float,
+    rmssd: float | None,
+    lf_hf: float | None,
+    sdnn: float | None,
+    signal_quality: float,
+    window_type: str,
+) -> None:
+    """Insert one physiological reading row."""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn.execute("""
         INSERT INTO physio_readings
-            (timestamp, heart_rate, rmssd, lf_hf_ratio, signal_quality, modality)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (ts, heart_rate, rmssd, lf_hf, signal_quality, "rppg_face"))
+            (timestamp, heart_rate, rmssd, lf_hf_ratio, sdnn, signal_quality, window_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (ts, heart_rate, rmssd, lf_hf, sdnn, signal_quality, window_type))
     conn.commit()
-    print(f"[DB] Saved → {ts} | HR: {heart_rate:.1f} BPM | "
-          f"RMSSD: {rmssd:.1f} ms | LF/HF: {lf_hf:.2f} | "
-          f"Quality: {signal_quality:.2f}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HRV COMPUTATION VIA NEUROKIT2
-# We extract the raw BVP waveform from open-rppg and pass it to neurokit2,
-# which is purpose-built for physiological signal analysis and gives us
-# reliable RMSSD and LF/HF even on short (30s) windows.
-# ─────────────────────────────────────────────────────────────────────────────
-
-def compute_hrv(model: rppg.Model,
-                window_seconds: int,
-                sampling_rate: int) -> dict:
-    """
-    Extract the BVP signal from open-rppg's buffer and compute HRV metrics
-    using neurokit2.
-
-    Steps:
-      1. Retrieve raw BVP waveform from the last window_seconds of signal
-      2. Use neurokit2 to clean the signal and detect peaks (R-peaks / systolic peaks)
-      3. Compute RR intervals from the peak positions
-      4. Compute RMSSD and LF/HF from those intervals
-
-    Returns a dict with: heart_rate, rmssd, lf_hf, signal_quality
-    Returns zeros if the signal is too noisy or too short.
-    """
-
-    # ── Get HR from open-rppg (this is reliable even at 30s) ─────────────────
-    result = model.hr(start=-window_seconds)
-    if result is None or not result.get("hr"):
-        return {"heart_rate": 0.0, "rmssd": 0.0, "lf_hf": 0.0, "signal_quality": 0.0}
-
-    heart_rate = float(result["hr"])
-    if not (30 < heart_rate < 220):
-        # Reject physiologically impossible values
-        return {"heart_rate": 0.0, "rmssd": 0.0, "lf_hf": 0.0, "signal_quality": 0.0}
-
-    # ── Get raw BVP waveform from open-rppg's buffer ──────────────────────────
-    # bvp() returns (signal_array, timestamps_array) for the last N seconds
-    bvp_data = model.bvp(start=-window_seconds)
-    if bvp_data is None:
-        # HR is valid but no raw waveform available — return HR only
-        return {"heart_rate": round(heart_rate, 1),
-                "rmssd": 0.0, "lf_hf": 0.0, "signal_quality": 0.5}
-
-    bvp_signal, _ = bvp_data
-
-    # Need at least 10 seconds of signal for meaningful HRV
-    if len(bvp_signal) < sampling_rate * 10:
-        return {"heart_rate": round(heart_rate, 1),
-                "rmssd": 0.0, "lf_hf": 0.0, "signal_quality": 0.5}
-
-    try:
-        # ── neurokit2: clean signal and find peaks ────────────────────────────
-        # ppg_clean() applies bandpass filtering suited for PPG/BVP signals
-        cleaned = nk.ppg_clean(bvp_signal, sampling_rate=sampling_rate)
-
-        # ppg_findpeaks() locates systolic peaks (heartbeat positions)
-        peaks_info = nk.ppg_findpeaks(cleaned, sampling_rate=sampling_rate)
-        peak_indices = peaks_info["PPG_Peaks"]
-
-        if len(peak_indices) < 4:
-            # Too few peaks for HRV — signal may still be stabilising
-            return {"heart_rate": round(heart_rate, 1),
-                    "rmssd": 0.0, "lf_hf": 0.0, "signal_quality": 0.3}
-
-        # ── Compute RR intervals in milliseconds ──────────────────────────────
-        # RR interval = time between consecutive heartbeats
-        rr_intervals_ms = np.diff(peak_indices) / sampling_rate * 1000
-
-        # ── RMSSD: Root Mean Square of Successive Differences ─────────────────
-        # Standard short-term HRV metric. Lower under stress.
-        successive_diffs = np.diff(rr_intervals_ms)
-        rmssd = float(np.sqrt(np.mean(successive_diffs ** 2)))
-
-        # ── LF/HF ratio via neurokit2 frequency analysis ──────────────────────
-        # Requires at least ~60s for reliable frequency domain HRV.
-        # At 30s we attempt it but fall back gracefully if it fails.
-        try:
-            hrv_freq = nk.hrv_frequency(
-                peak_indices,
-                sampling_rate=sampling_rate,
-                show=False   # don't open a matplotlib plot
-            )
-            lf_hf = float(hrv_freq["HRV_LFHF"].iloc[0])
-            # Sanity check: LF/HF should be between 0 and 20 for real signals
-            if not (0 < lf_hf < 20):
-                lf_hf = 0.0
-        except Exception:
-            # LF/HF computation can fail at short windows — that's fine
-            lf_hf = 0.0
-
-        # ── Signal quality estimate ───────────────────────────────────────────
-        # Use coefficient of variation of RR intervals as a rough quality proxy.
-        # High variation in RR intervals suggests motion artefacts.
-        cv = np.std(rr_intervals_ms) / np.mean(rr_intervals_ms)
-        quality = float(np.clip(1.0 - cv, 0.0, 1.0))
-
-        return {
-            "heart_rate":     round(heart_rate, 1),
-            "rmssd":          round(rmssd, 1),
-            "lf_hf":          round(lf_hf, 2),
-            "signal_quality": round(quality, 2),
-        }
-
-    except Exception as e:
-        # Catch any unexpected neurokit2 errors gracefully
-        print(f"[WARN] HRV computation failed: {e}")
-        return {"heart_rate": round(heart_rate, 1),
-                "rmssd": 0.0, "lf_hf": 0.0, "signal_quality": 0.5}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHYSIO MODULE
-# Wraps open-rppg. All rPPG logic lives here — the rest of the system only
-# calls start() and stop(). Swapping the library later only changes this class.
+# Thin wrapper around open-rppg. All rPPG logic lives here.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PhysioModule:
-    """Thin wrapper around open-rppg for clean integration into the system."""
+    """
+    Wraps rppg.Model for clean integration into the shared-feed architecture.
+
+    Phase 2 usage pattern:
+      module = PhysioModule()
+      with module.model:                          # starts inference thread
+          while running:
+              frame = feed.get_frame()            # BGR from SharedCameraFeed
+              if frame is not None:
+                  module.push_frame(frame)        # convert BGR→RGB, feed model
+              # query model.hr() on schedule
+    """
 
     def __init__(self, model_name: str = RPPG_MODEL):
         print(f"[rPPG] Loading model: {model_name} ...")
         self.model = rppg.Model(model_name)
-        self._camera_ctx = None
         print("[rPPG] Model loaded.")
 
-    def __enter__(self):
-        self._camera_ctx = self.model.video_capture(WEBCAM_INDEX)
-        self._camera_ctx.__enter__()
-        print(f"[rPPG] Webcam opened (index {WEBCAM_INDEX}).")
-        return self
+    def push_frame(self, bgr_frame: np.ndarray) -> None:
+        """
+        Convert a BGR frame (from SharedCameraFeed) to RGB and feed it to
+        the rPPG model for BVP signal accumulation.
 
-    def __exit__(self, *args):
-        # Suppress the RuntimeError open-rppg raises on thread join at shutdown.
-        # The error is cosmetic — cleanup completes correctly regardless.
-        try:
-            if self._camera_ctx:
-                self._camera_ctx.__exit__(*args)
-        except RuntimeError:
-            pass   # known open-rppg cleanup bug — safe to ignore
-        print("[rPPG] Webcam released.")
+        open-rppg's update_frame() expects RGB; OpenCV gives us BGR.
+        """
+        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        self.model.update_frame(rgb)
+
+    def get_hr(self, window_seconds: int) -> dict | None:
+        """
+        Query the model for HR and signal quality over the last window_seconds.
+
+        Returns a dict with 'hr', 'SQI', and optionally 'hrv' (heartpy metrics
+        populated only when SQI > 0.5 and enough signal is available).
+        Returns None if the model has no signal yet.
+        """
+        return self.model.hr(start=-window_seconds, return_hrv=False)
+
+    def get_hrv(self, window_seconds: int) -> dict | None:
+        """
+        Query the model for full HRV metrics over the last window_seconds.
+        Includes RMSSD, SDNN, LF/HF from heartpy's frequency-domain analysis.
+        HRV fields are populated only when SQI > 0.5.
+        """
+        return self.model.hr(start=-window_seconds, return_hrv=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN LOOP
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_monitor():
+def run_monitor(feed: SharedCameraFeed) -> None:
     """
-    Open the webcam, collect frames, compute readings every WINDOW_SECONDS,
-    and save them to the database. Press Q or Ctrl+C to stop cleanly.
+    Process frames from the shared camera feed, compute HR every 10 s and
+    full HRV every 5 min, and save readings to the database.
+
+    Parameters
+    ----------
+    feed : SharedCameraFeed
+        Running shared camera feed. Must already be started (feed.start()
+        called) before this function is invoked.
     """
-    conn        = init_database(DB_PATH)
-    physio      = PhysioModule()
-    stop_event  = threading.Event()   # signals the loop to exit cleanly on Q
+    conn    = init_database()
+    physio  = PhysioModule()
+    stop_ev = threading.Event()
 
-    print(f"\n[INFO] Starting rPPG monitor.")
-    print(f"[INFO] Readings every {WINDOW_SECONDS}s — keep face visible and still.")
-    print(f"[INFO] Press Q in the preview window, or Ctrl+C, to quit.\n")
+    hr_window_start  = time.monotonic()
+    hrv_window_start = time.monotonic()
+    last_status      = time.monotonic()
+    STATUS_INTERVAL  = 5.0   # seconds between "still running" console prints
 
-    window_start = time.time()
-    last_status  = time.time()
+    print(f"\n[rPPG] Monitor started.")
+    print(f"[rPPG] HR every {HR_WINDOW_SECONDS}s | HRV every {HRV_WINDOW_SECONDS}s.")
+    print(f"[rPPG] Keep face visible and still. Press Q to quit.\n")
 
     try:
-        with physio:
-            for frame, box in physio.model.preview:
+        with physio.model:   # initialises rPPG inference thread
 
-                if stop_event.is_set():
-                    break
+            while not stop_ev.is_set():
+                frame = feed.get_frame()
 
-                # ── Draw preview ──────────────────────────────────────────────
-                preview = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                if frame is None:
+                    time.sleep(0.01)
+                    continue
 
+                # ── Feed frame to rPPG model ──────────────────────────────────
+                physio.push_frame(frame)
+
+                # ── Build annotated preview ───────────────────────────────────
+                preview = frame.copy()
+                box = physio.model.box
                 if box is not None:
-                    y1, y2 = box[0]
-                    x1, x2 = box[1]
+                    # box shape: ((y_start, y_end), (x_start, x_end))
+                    y1, y2 = int(box[0][0]), int(box[0][1])
+                    x1, x2 = int(box[1][0]), int(box[1][1])
                     cv2.rectangle(preview, (x1, y1), (x2, y2), (0, 200, 100), 2)
-                    cv2.putText(preview, "Face OK", (x1, y1 - 8),
+                    cv2.putText(preview, "Face OK", (x1, max(y1 - 8, 12)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 100), 1)
                 else:
                     cv2.putText(preview,
@@ -270,59 +213,113 @@ def run_monitor():
                                 (10, 30),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 220), 2)
 
-                elapsed   = time.time() - window_start
-                remaining = max(0, WINDOW_SECONDS - int(elapsed))
-                cv2.putText(preview, f"Next reading in {remaining}s",
+                # Show time remaining to next HR reading
+                hr_elapsed  = time.monotonic() - hr_window_start
+                hr_remaining = max(0, HR_WINDOW_SECONDS - int(hr_elapsed))
+                cv2.putText(preview, f"HR in {hr_remaining}s",
                             (10, preview.shape[0] - 12),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
                 cv2.imshow("rPPG Monitor — Q to quit", preview)
-
-                # Set the stop event instead of breaking immediately —
-                # this lets the with-block exit on its own terms (cleaner shutdown)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
-                    print("[INFO] Q pressed — stopping.")
-                    stop_event.set()
+                    print("[rPPG] Q pressed — stopping.")
+                    stop_ev.set()
                     break
 
-                # ── Periodic status ───────────────────────────────────────────
-                now = time.time()
-                if now - last_status >= PRINT_INTERVAL:
-                    print(f"[INFO] Collecting... {remaining}s until next reading.")
+                now = time.monotonic()
+
+                # ── Periodic console status ───────────────────────────────────
+                if now - last_status >= STATUS_INTERVAL:
+                    hrv_elapsed = now - hrv_window_start
+                    print(f"[rPPG] Collecting… "
+                          f"HR in {max(0, HR_WINDOW_SECONDS - int(hr_elapsed))}s | "
+                          f"HRV in {max(0, HRV_WINDOW_SECONDS - int(hrv_elapsed))}s")
                     last_status = now
 
-                # ── Reading every WINDOW_SECONDS ──────────────────────────────
-                if elapsed >= WINDOW_SECONDS:
-                    metrics = compute_hrv(physio.model, WINDOW_SECONDS, SAMPLING_RATE)
+                # ── HR reading every 10 s ─────────────────────────────────────
+                if now - hr_window_start >= HR_WINDOW_SECONDS:
+                    result = physio.get_hr(HR_WINDOW_SECONDS)
 
-                    if metrics["heart_rate"] > 0:
-                        save_reading(
-                            conn,
-                            heart_rate=metrics["heart_rate"],
-                            rmssd=metrics["rmssd"],
-                            lf_hf=metrics["lf_hf"],
-                            signal_quality=metrics["signal_quality"],
-                        )
-                        print(f"\n{'─'*48}")
-                        print(f"  Heart Rate    : {metrics['heart_rate']:.1f} BPM")
-                        print(f"  RMSSD         : {metrics['rmssd']:.1f} ms")
-                        print(f"  LF/HF ratio   : {metrics['lf_hf']:.2f}")
-                        print(f"  Signal quality: {metrics['signal_quality']:.2f} / 1.00")
-                        print(f"{'─'*48}\n")
+                    if result and result.get("hr"):
+                        hr  = float(result["hr"])
+                        sqi = float(result.get("SQI") or 0.0)
+
+                        if 30.0 < hr < 220.0:
+                            save_reading(conn,
+                                         heart_rate    = round(hr, 1),
+                                         rmssd         = None,
+                                         lf_hf         = None,
+                                         sdnn          = None,
+                                         signal_quality = round(sqi, 2),
+                                         window_type   = "hr_10s")
+                            print(f"[HR]  {round(hr, 1):5.1f} BPM  "
+                                  f"SQI: {sqi:.2f}")
+                        else:
+                            print(f"[rPPG] HR {hr:.0f} BPM outside valid range "
+                                  f"— discarded.")
                     else:
-                        print("[WARN] Signal too weak this window. "
-                              "Ensure face is well-lit, centred, and still.")
+                        print("[rPPG] Not enough signal yet "
+                              f"(need {HR_WINDOW_SECONDS}s of face data).")
 
-                    window_start = time.time()
+                    hr_window_start = now
+
+                # ── HRV reading every 5 min ───────────────────────────────────
+                if now - hrv_window_start >= HRV_WINDOW_SECONDS:
+                    result = physio.get_hrv(HRV_WINDOW_SECONDS)
+
+                    if result and result.get("hr"):
+                        hr  = float(result["hr"])
+                        sqi = float(result.get("SQI") or 0.0)
+                        hrv = result.get("hrv") or {}   # empty if SQI ≤ 0.5
+
+                        rmssd = hrv.get("rmssd")
+                        sdnn  = hrv.get("sdnn")
+                        lf_hf = hrv.get("LF/HF")
+
+                        if 30.0 < hr < 220.0:
+                            save_reading(
+                                conn,
+                                heart_rate    = round(hr, 1),
+                                rmssd         = round(rmssd, 1) if rmssd else None,
+                                lf_hf         = round(lf_hf, 2)  if lf_hf  else None,
+                                sdnn          = round(sdnn, 1)  if sdnn  else None,
+                                signal_quality = round(sqi, 2),
+                                window_type   = "hrv_5min",
+                            )
+                            print(f"\n{'─'*48}")
+                            print(f"  [HRV 5-min window]")
+                            print(f"  Heart Rate    : {round(hr, 1):.1f} BPM")
+                            print(f"  RMSSD         : "
+                                  f"{round(rmssd, 1):.1f} ms" if rmssd else
+                                  f"  RMSSD         : — (SQI too low)")
+                            print(f"  SDNN          : "
+                                  f"{round(sdnn, 1):.1f} ms" if sdnn else
+                                  f"  SDNN          : —")
+                            print(f"  LF/HF         : "
+                                  f"{round(lf_hf, 2):.2f}" if lf_hf else
+                                  f"  LF/HF         : —")
+                            print(f"  Signal quality: {sqi:.2f} / 1.00")
+                            print(f"{'─'*48}\n")
+                        else:
+                            print(f"[rPPG] HRV window HR {hr:.0f} BPM "
+                                  f"outside valid range — discarded.")
+                    else:
+                        print("[rPPG] HRV window: no signal available yet.")
+
+                    hrv_window_start = now
 
     except KeyboardInterrupt:
-        print("\n[INFO] Stopped by Ctrl+C.")
+        print("\n[rPPG] Stopped by Ctrl+C.")
 
     finally:
         cv2.destroyAllWindows()
         conn.close()
-        print("[INFO] Clean shutdown complete.")
+        print("[rPPG] Clean shutdown complete.")
 
+
+# ── Standalone entry point ────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    run_monitor()
+    print("[rPPG] Standalone mode — creating shared camera feed.")
+    with SharedCameraFeed(camera_index=CAMERA_INDEX, fps=CAMERA_FPS) as feed:
+        run_monitor(feed)
