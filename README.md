@@ -1,4 +1,4 @@
-# Multimodal Stress Detection & Mental Well-being Support System
+﻿# Multimodal Stress Detection & Mental Well-being Support System
 
 **MSc Thesis — Phase 2 Integrated System**  
 Dimitris Moforis · Department of Digital Systems · University of Piraeus  
@@ -13,12 +13,14 @@ This system detects cognitive stress in real time by fusing three independent da
 
 Designed for knowledge workers (students, developers, analysts) who spend extended hours at a computer. All processing is fully local: no video, audio, or raw biometric data leaves the machine. Only extracted numerical features are stored.
 
+When elevated stress or sustained negative affect is detected, the system generates contextual natural-language recommendations via Llama 3.1 8B (Ollama) and delivers them as Windows desktop toast notifications. Stress scoring is individually calibrated: a two-minute resting baseline session records the user's personal HR, RMSSD, EAR, blink rate, valence, and arousal, which the fusion layer uses instead of fixed population means.
+
 **Core output:** a `stress_index` in [0, 1] computed every five minutes, together with continuous valence and arousal estimates that characterise the user's emotional state on the Russell (1980) circumplex model of affect.
 
 | Modality | Data source | Key signals |
 |----------|-------------|-------------|
 | Physiological | Webcam (rPPG) | Heart rate (BPM), RMSSD, LF/HF ratio |
-| Facial analysis | Webcam (MediaPipe + EmoNet) | Blink rate, EAR, head pose, valence, arousal |
+| Facial analysis | Webcam (MediaPipe + EmoNet-8) | Blink rate, EAR, head pose, valence, arousal |
 | Desktop context | Windows OS (Flutter + win32) | Active window, LLM-classified category, idle time, activity %, window switches |
 
 ---
@@ -29,44 +31,44 @@ Designed for knowledge workers (students, developers, analysts) who spend extend
                         SHARED CAMERA FEED
                    src/camera/shared_feed.py
                    (single OpenCV capture thread)
-                              │
-               ┌──────────────┼──────────────┐
-               ▼              ▼              ▼
-       ┌─────────────┐ ┌────────────┐ ┌───────────────────┐
-       │   PHYSIO    │ │    FACE    │ │      DESKTOP       │
-       │ rppg_monitor│ │ face_monitor│ │  Flutter + win32  │
-       │             │ │            │ │  (separate build) │
-       │ HR  / 10 s  │ │ EAR, blink │ │  active window    │
-       │ HRV / 5 min │ │ head pose  │ │  LLM category     │
-       │             │ │ valence    │ │  idle time        │
-       │             │ │ arousal    │ │  activity %       │
-       └──────┬──────┘ └─────┬──────┘ └────────┬──────────┘
-              │              │                  │
-              ▼              ▼                  ▼
+                              |
+               +--------------+--------------+
+               v              v              v
+       +-------------+ +------------+ +-------------------+
+       |   PHYSIO    | |    FACE    | |      DESKTOP      |
+       | rppg_monitor| | face_monitor| |  Flutter + win32  |
+       |             | |            | |  (separate build) |
+       | HR  / 10 s  | | EAR, blink | |  active window    |
+       | HRV / 5 min | | head pose  | |  LLM category     |
+       |             | | valence    | |  idle time        |
+       |             | | arousal    | |  activity %       |
+       +------+------+ +-----+------+ +--------+----------+
+              |              |                  |
+              v              v                  v
        physio_readings   face_readings    desktop_readings
-                  ╲           │            ╱
-                   ╲          │           ╱
-                    ▼         ▼          ▼
-              ┌───────────────────────────────┐
-              │   AGGREGATOR  (every 5 min)   │
-              │   src/fusion/aggregator.py    │
-              └───────────────┬───────────────┘
-                              │
-                              ▼
-                   ┌──────────────────────┐
-                   │    LATE FUSION       │
-                   │  physio  × 0.40      │
-                   │  face    × 0.40      │
-                   │  desktop × 0.20      │
-                   └──────────┬───────────┘
-                              │  stress_index
-                              ▼
-                   ┌──────────────────────┐
-                   │  INTERVENTION ENGINE │
-                   │  Llama 3.2 8B        │
-                   │  (Ollama, GPU-local) │
-                   │  → Windows toast     │
-                   └──────────────────────┘
+                  \           |            /
+                   \          |           /
+                    v         v          v
+              +-------------------------------+
+              |   AGGREGATOR  (every 5 min)   |
+              |   src/fusion/aggregator.py    |
+              +---------------+---------------+
+                              |
+                              v
+                   +----------------------+
+                   |    LATE FUSION       |
+                   |  physio  x 0.40      |
+                   |  face    x 0.40      |
+                   |  desktop x 0.20      |
+                   +----------+-----------+
+                              |  stress_index
+                              v
+                   +----------------------+
+                   |  INTERVENTION ENGINE |
+                   |  Llama 3.1 8B        |
+                   |  (Ollama, GPU-local) |
+                   |  -> Windows toast    |
+                   +----------------------+
 ```
 
 ---
@@ -77,10 +79,11 @@ Designed for knowledge workers (students, developers, analysts) who spend extend
 |--------|------|---------|
 | Shared camera feed | `src/camera/shared_feed.py` | Single OpenCV capture thread; distributes frames to physio and face modules without exclusive-access conflicts |
 | Physio monitor | `src/physio/rppg_monitor.py` | rPPG → BVP signal → HR every 10 s, full HRV every 5 min |
+| HRV processor | `src/physio/hrv_processor.py` | RMSSD computation and plausibility validation (5–80 ms bounds, HR cross-validation) |
 | Face monitor | `src/face/face_monitor.py` | MediaPipe 468-landmark mesh → EAR, blink rate, head pose, every 30 s |
 | Valence-Arousal | `src/face/valence_arousal.py` | EmoNet-8 (Toisoul et al., 2021) → continuous valence and arousal from face crop |
 | Desktop monitor | `src/desktop/lib/main.dart` | Flutter + win32 → active window title, LLM-classified category, idle time, activity %, window switches |
-| LLM classifier | `src/llm/classifier.py` | Llama 3.2 8B classifies window titles into activity categories (Academic Work, Software Development, Social Media, etc.) |
+| LLM classifier | `src/llm/classifier.py` | Llama 3.1 8B classifies window titles into activity categories (Academic Work, Software Development, Social Media, etc.) |
 | LLM recommender | `src/llm/recommender.py` | Generates contextual, natural-language well-being recommendations based on the current stress context |
 | Aggregator | `src/fusion/aggregator.py` | Background thread that merges raw readings into 5-minute summary windows and triggers fusion scoring |
 | Late fusion | `src/fusion/late_fusion.py` | Weighted combination of per-modality stress scores; uses personal baselines for physio and face scoring |
@@ -118,11 +121,12 @@ Key packages installed via `requirements.txt`:
 | `open-rppg` | rPPG heart rate and BVP extraction |
 | `mediapipe` | Real-time face landmark detection |
 | `torch`, `torchvision` | EmoNet-8 valence-arousal inference |
-| `ollama` | Local LLM client (Llama 3.2 8B) |
+| `ollama` | Local LLM client (Llama 3.1 8B) |
 | `neurokit2` | HRV signal processing utilities |
 | `opencv-python` | Camera capture and frame processing |
 | `pandas`, `openpyxl` | Excel export |
 | `plyer` | Windows desktop notifications |
+| `colorama` | Colour-coded terminal output for daily summaries |
 
 ### Ollama — local LLM runtime
 
@@ -132,8 +136,8 @@ The window-title classifier and recommendation engine require Ollama installed l
 2. Pull the required model (approximately 5 GB, downloaded once):
 
 ```powershell
-ollama pull llama3.2:8b
-ollama run llama3.2:8b "Say hello in one sentence"   # verify
+ollama pull llama3.1:8b
+ollama run llama3.1:8b "Say hello in one sentence"   # verify
 ```
 
 ### Flutter — desktop context monitor
@@ -178,7 +182,7 @@ The LLM classifier and recommendation engine require the Ollama inference server
 ollama serve
 ```
 
-This starts the local server on `http://localhost:11434`. The model is loaded into GPU VRAM on the first request. If Ollama is not running, the classifier falls back to keyword matching and no recommendations are generated.
+This starts the local server on `http://localhost:11434`. The model is loaded into GPU VRAM on the first request. If Ollama is not running, the classifier falls back to keyword matching and the recommender uses template-based messages.
 
 ### Step 3 — Launch the unified system
 
@@ -189,6 +193,42 @@ python run_all.py
 This starts all Python modules (physio monitor, face monitor, aggregator, intervention engine) sharing a single camera feed, and launches the Flutter desktop context monitor. A combined preview window displays the face mesh overlay with live HR and stress index annotations.
 
 Press **Q** in the preview window to stop all modules cleanly.
+
+---
+
+## Data Collection
+
+### How the aggregation cycle works
+
+The system operates on a five-minute rolling window cycle. During each window:
+
+1. **Raw feature extraction** — the physio, face, and desktop modules write readings to the database continuously at their respective rates: HR every 10 s; face metrics (EAR, blink rate, valence, arousal, head pose) every 30 s; desktop metrics every 30 s.
+2. **Window aggregation** — at the end of each five-minute interval, the Aggregator reads all raw rows from the preceding window and computes per-modality summary statistics (mean HR, mean RMSSD, mean valence and arousal, dominant app category, total window switches, etc.).
+3. **Fusion scoring** — the `LateFusion` module combines the per-modality summaries into a single `stress_index` in [0, 1], weighted as physio × 0.40, face × 0.40, desktop × 0.20. If a modality produced no data in the window, its weight is dropped and the remaining weights are renormalised. Physio and face scores are computed as deviations from the user's personal resting baseline.
+4. **Intervention check** — if the `stress_index` exceeds 0.65 for two consecutive windows, or if mean valence falls below −0.4 in the current window, the intervention engine requests a natural-language recommendation from Llama 3.1 8B and delivers it as a Windows toast notification. A 15-minute cooldown prevents notification overload.
+
+All four steps are fully automatic once `run_all.py` is running. The `aggregated_windows` table is the primary analysis unit for the thesis.
+
+### Monitoring data quality
+
+A built-in data quality report can be printed at any time without stopping the system:
+
+```powershell
+python -c "from src.utils.db import data_health_check; data_health_check()"
+```
+
+This prints row counts for all tables, rPPG signal quality statistics, RMSSD plausibility metrics, desktop timestamp format distribution, and modality coverage per aggregated window.
+
+### Session review
+
+After a monitoring session, a human-readable daily summary can be generated for any date:
+
+```powershell
+python daily_summary.py                      # today
+python daily_summary.py --date 2026-05-18    # specific date
+```
+
+The summary prints colour-coded statistics — stress index, heart rate, valence and arousal with quadrant interpretation, dominant app category, total window switches, and any interventions triggered — directly to the terminal. A plain-text copy is saved automatically to `data/exports/daily_summary_YYYY-MM-DD.txt`.
 
 ---
 
@@ -232,15 +272,15 @@ All modules write to `data/stress_monitor.db` (SQLite, WAL journal mode):
 
 ```sql
 -- Physiological readings (rPPG)
--- window_type: 'hr_10s' or 'hrv_5min'
+-- window_type: 'hr_10s' (every 10 s) or 'hrv_5min' (every 5 min)
 CREATE TABLE physio_readings (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp      TEXT NOT NULL,
     heart_rate     REAL,   -- BPM
-    rmssd          REAL,   -- ms  (hrv_5min rows only; validated 5–200 ms)
+    rmssd          REAL,   -- ms  (hrv_5min rows only; validated 5-80 ms)
     lf_hf_ratio    REAL,   -- frequency-domain HRV (hrv_5min rows only)
     sdnn           REAL,   -- ms
-    signal_quality REAL,   -- 0–1 (open-rppg SQI)
+    signal_quality REAL,   -- 0-1 (open-rppg SQI)
     window_type    TEXT
 );
 
@@ -249,13 +289,13 @@ CREATE TABLE face_readings (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp         TEXT NOT NULL,
     blink_rate        REAL,   -- blinks/min
-    mean_ear          REAL,   -- Eye Aspect Ratio 0–1
+    mean_ear          REAL,   -- Eye Aspect Ratio 0-1
     pitch_deg         REAL,   -- head tilt up/down
     yaw_deg           REAL,   -- head turn left/right
     roll_deg          REAL,   -- head tilt left/right
     face_detected_pct REAL,   -- % of 30-s window with face visible
-    valence           REAL,   -- –1 (unpleasant) to +1 (pleasant)
-    arousal           REAL    -- –1 (drowsy) to +1 (alert)
+    valence           REAL,   -- -1 (unpleasant) to +1 (pleasant)
+    arousal           REAL    -- -1 (drowsy) to +1 (alert)
 );
 
 -- Desktop context (Flutter + win32)
@@ -287,8 +327,20 @@ CREATE TABLE aggregated_windows (
     avg_activity_pct        REAL,
     avg_idle_seconds        REAL,
     total_window_switches   INTEGER,
-    stress_index            REAL,   -- 0–1
+    stress_index            REAL,   -- 0-1
     intervention_triggered  INTEGER -- 0 or 1
+);
+
+-- Personal resting baseline (calibrated per user)
+CREATE TABLE baselines (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT NOT NULL,
+    hr          REAL,   -- resting heart rate (BPM)
+    rmssd       REAL,   -- resting RMSSD (ms)
+    ear         REAL,   -- resting Eye Aspect Ratio
+    blink_rate  REAL,   -- resting blink rate (blinks/min)
+    valence     REAL,   -- resting valence (-1 to +1)
+    arousal     REAL    -- resting arousal (-1 to +1)
 );
 
 -- Intervention and feedback log
@@ -317,10 +369,10 @@ CREATE TABLE user_feedback (
 ## Design Principles
 
 - **Privacy-by-design** — no video, audio, or screenshots are stored; only extracted numerical features
-- **Local-first** — all inference (rPPG, MediaPipe, EmoNet, Llama) runs on-device; no network calls after the initial model download
+- **Local-first** — all inference (rPPG, MediaPipe, EmoNet-8, Llama 3.1) runs on-device; no network calls after the initial model download
 - **Personal baseline** — stress scoring uses individual resting measurements rather than fixed population thresholds
 - **Graceful degradation** — each modality is independent; if data is unavailable the modality is excluded and remaining weights are renormalised
-- **Modularity** — each module has a single responsibility and is independently testable
+- **Modularity** — each module has a single responsibility and is independently testable (see `tests/`)
 
 ---
 
@@ -332,8 +384,8 @@ CREATE TABLE user_feedback (
 | LF/HF at short windows | Frequency-domain HRV requires at least 5 minutes of clean signal. LF/HF values will be `NULL` in the early phase of each session. |
 | Roll° instability | OpenCV `RQDecomp3x3` exhibits gimbal-lock artefacts at extreme pitch angles. Roll° readings beyond ±60° should be treated as unreliable. |
 | rPPG signal quality | The rPPG SQI under typical office lighting is approximately 0.35–0.50. HRV metrics are suppressed when SQI < 0.5. Stable frontal lighting improves signal quality. |
-| RMSSD range validation | RMSSD values outside 5–200 ms are discarded before storage as physiologically implausible, caused by noise peaks in the BVP signal. |
-| Desktop timestamp normalisation | The Flutter app writes ISO 8601 timestamps with a `T` separator; Python modules use a space separator. The database query layer normalises this automatically. |
+| RMSSD range validation | RMSSD values outside 5–80 ms are rejected before storage. The upper bound is tighter than ECG-based guidelines (120 ms) because rPPG-derived peak detection produces greater inter-beat jitter, inflating RMSSD estimates under low-SQI conditions. |
+| Desktop timestamp normalisation | The Flutter app writes ISO 8601 timestamps with a `T` separator; Python modules use a space separator. The database query layer normalises this automatically via `REPLACE(timestamp, 'T', ' ')`. |
 
 ---
 
@@ -341,62 +393,65 @@ CREATE TABLE user_feedback (
 
 ```
 stress_detection/
-├── CLAUDE.md                          ← project context for Claude Code sessions
-├── SPEC.md                            ← full technical specification
-├── README.md                          ← this file
+├── CLAUDE.md                          <- project context for Claude Code sessions
+├── SPEC.md                            <- full technical specification
+├── README.md                          <- this file
 ├── requirements.txt
-├── run_all.py                         ← unified launcher (all modules)
-├── view_data.py                       ← terminal database viewer
-├── export_excel.py                    ← Excel export script
-│
+├── run_all.py                         <- unified launcher (all modules)
+├── view_data.py                       <- terminal database viewer
+├── export_excel.py                    <- Excel export script
+├── daily_summary.py                   <- colour-coded daily summary for participants
+|
 ├── data/
-│   ├── stress_monitor.db              ← shared SQLite database (WAL mode)
-│   ├── exports/                       ← generated Excel workbooks
-│   └── models/                        ← cached model weights (EmoNet-8)
-│
+|   ├── stress_monitor.db              <- shared SQLite database (WAL mode)
+|   ├── exports/                       <- Excel workbooks and daily summary txt files
+|   └── models/                        <- cached model weights (EmoNet-8)
+|
 ├── docs/
-│   └── screenshots/
-│
+|   └── screenshots/
+|
 ├── src/
-│   ├── camera/
-│   │   └── shared_feed.py             ← single OpenCV capture thread
-│   │
-│   ├── physio/
-│   │   ├── rppg_monitor.py            ← HR every 10 s, HRV every 5 min
-│   │   └── hrv_processor.py           ← HRV computation helpers
-│   │
-│   ├── face/
-│   │   ├── face_monitor.py            ← EAR, blink rate, head pose (30 s)
-│   │   ├── ear_blink.py               ← EAR formula + blink event detection
-│   │   ├── head_pose.py               ← solvePnP head pose estimation
-│   │   └── valence_arousal.py         ← EmoNet-8 continuous VA prediction
-│   │
-│   ├── desktop/
-│   │   └── lib/main.dart              ← Flutter desktop context monitor
-│   │
-│   ├── llm/
-│   │   ├── classifier.py              ← Ollama window-title classification
-│   │   └── recommender.py             ← Ollama recommendation generation
-│   │
-│   ├── fusion/
-│   │   ├── late_fusion.py             ← weighted per-modality score combination
-│   │   └── aggregator.py              ← 5-minute aggregation background thread
-│   │
-│   ├── wellbeing/
-│   │   ├── interventions.py           ← intervention trigger logic
-│   │   └── notifier.py                ← Windows desktop toast notifications
-│   │
-│   └── utils/
-│       ├── db.py                      ← shared SQLite helpers (WAL, row factory)
-│       ├── config.py                  ← all configuration constants
-│       ├── baseline.py                ← personal baseline calibration
-│       └── logger.py                  ← structured logging
-│
+|   ├── camera/
+|   |   └── shared_feed.py             <- single OpenCV capture thread
+|   |
+|   ├── physio/
+|   |   ├── rppg_monitor.py            <- HR every 10 s, HRV every 5 min
+|   |   └── hrv_processor.py           <- RMSSD computation and validation helpers
+|   |
+|   ├── face/
+|   |   ├── face_monitor.py            <- EAR, blink rate, head pose (30 s)
+|   |   ├── ear_blink.py               <- EAR formula + blink event detection
+|   |   ├── head_pose.py               <- solvePnP head pose estimation
+|   |   └── valence_arousal.py         <- EmoNet-8 continuous VA prediction
+|   |
+|   ├── desktop/
+|   |   └── lib/main.dart              <- Flutter desktop context monitor
+|   |
+|   ├── llm/
+|   |   ├── classifier.py              <- Ollama window-title classification
+|   |   └── recommender.py             <- Ollama recommendation generation
+|   |
+|   ├── fusion/
+|   |   ├── late_fusion.py             <- weighted per-modality score combination
+|   |   └── aggregator.py              <- 5-minute aggregation background thread
+|   |
+|   ├── wellbeing/
+|   |   ├── interventions.py           <- intervention trigger logic
+|   |   └── notifier.py                <- Windows desktop toast notifications
+|   |
+|   └── utils/
+|       ├── db.py                      <- shared SQLite helpers (WAL, row factory)
+|       ├── config.py                  <- all configuration constants
+|       ├── baseline.py                <- personal baseline calibration
+|       └── logger.py                  <- structured logging
+|
 └── tests/
-    ├── test_ear.py
-    ├── test_hrv.py
-    ├── test_fusion.py
-    └── test_llm.py
+    ├── conftest.py                    <- shared fixtures (tmp_db, sample_landmarks, sample_bvp)
+    ├── test_ear.py                    <- EAR formula and blink detection
+    ├── test_hrv.py                    <- RMSSD computation and validation
+    ├── test_fusion.py                 <- LateFusion scoring
+    ├── test_db.py                     <- database helpers and timestamp normalisation
+    └── test_llm.py                    <- LLM classifier smoke tests
 ```
 
 ---
@@ -468,3 +523,4 @@ The two-minute resting calibration (`python src/utils/baseline.py --calibrate`) 
 
 *University of Piraeus · Department of Digital Systems*  
 *MSc Programme: Information Systems & Services*
+
