@@ -150,6 +150,16 @@ class Aggregator:
             face_rows    = fetch_face_window(conn,    window_start, window_end)
             desktop_rows = fetch_desktop_window(conn, window_start, window_end)
 
+            # Diagnostic: confirm desktop rows are being picked up
+            print(f"[Aggregator] window {window_start:%H:%M}–{window_end:%H:%M} | "
+                  f"physio={len(physio_rows)} face={len(face_rows)} desktop={len(desktop_rows)}")
+            if desktop_rows:
+                r0 = desktop_rows[0]
+                print(f"[Aggregator]   desktop sample: ts={r0['timestamp']} "
+                      f"cat={r0['app_category']} act={r0['activity_pct']:.0f}%")
+            else:
+                print("[Aggregator]   desktop: no rows in window — desktop columns will be NULL")
+
             physio_agg  = self._aggregate_physio(physio_rows)
             face_agg    = self._aggregate_face(face_rows)
             desktop_agg = self._aggregate_desktop(desktop_rows)

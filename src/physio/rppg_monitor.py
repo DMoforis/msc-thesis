@@ -180,6 +180,13 @@ def run_monitor(feed: SharedCameraFeed) -> None:
     last_status      = time.monotonic()
     STATUS_INTERVAL  = 5.0   # seconds between "still running" console prints
 
+    # HR samples collected during the current HRV window — used for cross-validation.
+    # If the HRV window's inferred HR deviates by more than _MAX_HR_DELTA_FOR_HRV from
+    # the average of these 10s readings, the BVP peak series is considered inconsistent
+    # and HRV metrics are discarded for that window.
+    _MAX_HR_DELTA_FOR_HRV = 20.0   # BPM — maximum tolerable HR discrepancy
+    hr_samples_for_hrv: list[float] = []
+
     print(f"\n[rPPG] Monitor started.")
     print(f"[rPPG] HR every {HR_WINDOW_SECONDS}s | HRV every {HRV_WINDOW_SECONDS}s.")
     print(f"[rPPG] Keep face visible and still. Press Q to quit.\n")
@@ -252,6 +259,7 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                                          sdnn          = None,
                                          signal_quality = round(sqi, 2),
                                          window_type   = "hr_10s")
+                            hr_samples_for_hrv.append(hr)
                             print(f"[HR]  {round(hr, 1):5.1f} BPM  "
                                   f"SQI: {sqi:.2f}")
                         else:
@@ -276,11 +284,36 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                         sdnn_raw  = hrv.get("sdnn")
                         lf_hf     = hrv.get("LF/HF")
 
-                        # Sanity-check HRV metrics — noisy rPPG can produce
-                        # physiologically impossible values (e.g. RMSSD > 1000 ms).
-                        # Normal human range: RMSSD 5–200 ms, SDNN 5–250 ms.
-                        rmssd = round(rmssd_raw, 1) if (rmssd_raw and 5.0 < rmssd_raw < 200.0) else None
-                        sdnn  = round(sdnn_raw,  1) if (sdnn_raw  and 5.0 < sdnn_raw  < 250.0) else None
+                        # ── Cross-validate HR consistency ─────────────────────
+                        # If the HRV window's inferred HR diverges from the mean
+                        # of the 10s readings collected in the same window, the
+                        # BVP peak series is unreliable and HRV metrics are likely
+                        # artefactual.
+                        if hr_samples_for_hrv:
+                            avg_10s_hr   = sum(hr_samples_for_hrv) / len(hr_samples_for_hrv)
+                            hr_delta     = abs(hr - avg_10s_hr)
+                            hr_consistent = hr_delta <= _MAX_HR_DELTA_FOR_HRV
+                        else:
+                            avg_10s_hr    = hr
+                            hr_delta      = 0.0
+                            hr_consistent = True   # no 10s data yet — accept tentatively
+
+                        # ── Plausibility bounds ───────────────────────────────
+                        # Normal adult RMSSD at rest/work: ~15–60 ms (80 ms ceiling
+                        # for high-HRV individuals). SDNN ceiling: 150 ms.
+                        # rPPG-derived peaks have more jitter than ECG, so even
+                        # values that clear SQI > 0.5 can still be inflated —
+                        # the strict upper bounds are the primary quality gate.
+                        rmssd = (
+                            round(rmssd_raw, 1)
+                            if (rmssd_raw and 5.0 < rmssd_raw < 80.0 and hr_consistent)
+                            else None
+                        )
+                        sdnn = (
+                            round(sdnn_raw, 1)
+                            if (sdnn_raw and 5.0 < sdnn_raw < 150.0 and hr_consistent)
+                            else None
+                        )
 
                         if 30.0 < hr < 220.0:
                             save_reading(
@@ -292,26 +325,35 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                                 signal_quality = round(sqi, 2),
                                 window_type   = "hrv_5min",
                             )
-                            print(f"\n{'─'*48}")
+                            # Report raw vs. accepted values so discards are visible
+                            rmssd_str = (
+                                f"{rmssd:.1f} ms" if rmssd else
+                                f"-- (raw={rmssd_raw:.1f} ms, rejected)"
+                                if rmssd_raw else "-- (SQI too low)"
+                            )
+                            print(f"\n{'-'*52}")
                             print(f"  [HRV 5-min window]")
-                            print(f"  Heart Rate    : {round(hr, 1):.1f} BPM")
-                            print(f"  RMSSD         : "
-                                  f"{rmssd:.1f} ms" if rmssd else
-                                  f"  RMSSD         : — (SQI too low or out of range)")
+                            print(f"  Heart Rate    : {hr:.1f} BPM  "
+                                  f"(10s avg {avg_10s_hr:.1f}, d={hr_delta:.1f})")
+                            print(f"  RMSSD         : {rmssd_str}")
                             print(f"  SDNN          : "
                                   f"{sdnn:.1f} ms" if sdnn else
-                                  f"  SDNN          : —")
+                                  f"  SDNN          : --")
                             print(f"  LF/HF         : "
-                                  f"{round(lf_hf, 2):.2f}" if lf_hf else
-                                  f"  LF/HF         : —")
+                                  f"{lf_hf:.2f}" if lf_hf else
+                                  f"  LF/HF         : --")
                             print(f"  Signal quality: {sqi:.2f} / 1.00")
-                            print(f"{'─'*48}\n")
+                            if not hr_consistent:
+                                print(f"  *** HR inconsistency ({hr_delta:.1f} BPM) - HRV discarded")
+                            print(f"{'-'*52}\n")
                         else:
                             print(f"[rPPG] HRV window HR {hr:.0f} BPM "
                                   f"outside valid range — discarded.")
                     else:
                         print("[rPPG] HRV window: no signal available yet.")
 
+                    # Reset the HR sample buffer for the next HRV window
+                    hr_samples_for_hrv.clear()
                     hrv_window_start = now
 
     except KeyboardInterrupt:

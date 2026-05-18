@@ -169,6 +169,134 @@ def fetch_desktop_window(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DATA QUALITY MONITOR
+# ─────────────────────────────────────────────────────────────────────────────
+
+def data_health_check(db_path: str = DB_PATH) -> None:
+    """
+    Print a data quality summary to stdout.
+
+    Covers row counts, signal quality, RMSSD plausibility, desktop timestamp
+    format distribution, and aggregated-window modality coverage.
+    Useful for thesis documentation and pilot study monitoring.
+
+    Usage
+    -----
+    python -c "from src.utils.db import data_health_check; data_health_check()"
+    """
+    conn = open_db(db_path)
+    W = 52   # print width
+
+    try:
+        print(f"\n{'='*W}")
+        print(f"  Data Quality Report  {datetime.now():%Y-%m-%d %H:%M:%S}")
+        print(f"{'='*W}")
+
+        # ── Row counts ───────────────────────────────────────────────────────
+        print("\n  Row counts")
+        print(f"  {'-'*40}")
+        tables = [
+            "physio_readings", "face_readings", "desktop_readings",
+            "aggregated_windows", "baselines", "interventions",
+        ]
+        for t in tables:
+            try:
+                n = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                print(f"  {t:<30} {n:>6} rows")
+            except Exception:
+                print(f"  {t:<30}  (table not found)")
+
+        # ── Physio signal quality ────────────────────────────────────────────
+        print("\n  Physio - hr_10s readings")
+        print(f"  {'-'*40}")
+        r = conn.execute("""
+            SELECT COUNT(*) AS n,
+                   AVG(signal_quality)  AS avg_sqi,
+                   MIN(signal_quality)  AS min_sqi,
+                   MAX(signal_quality)  AS max_sqi,
+                   AVG(heart_rate)      AS avg_hr,
+                   MIN(heart_rate)      AS min_hr,
+                   MAX(heart_rate)      AS max_hr
+            FROM physio_readings WHERE window_type = 'hr_10s'
+        """).fetchone()
+        if r and r["n"]:
+            print(f"  count   : {r['n']}")
+            print(f"  HR (BPM): avg={r['avg_hr']:.1f}  min={r['min_hr']:.1f}  max={r['max_hr']:.1f}")
+            print(f"  SQI     : avg={r['avg_sqi']:.2f}  min={r['min_sqi']:.2f}  max={r['max_sqi']:.2f}")
+        else:
+            print("  (no hr_10s rows)")
+
+        # ── HRV quality ──────────────────────────────────────────────────────
+        print("\n  Physio - hrv_5min readings")
+        print(f"  {'-'*40}")
+        r = conn.execute("""
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN rmssd IS NOT NULL THEN 1 ELSE 0 END) AS valid_rmssd,
+                   AVG(rmssd) AS avg_rmssd,
+                   MIN(rmssd) AS min_rmssd,
+                   MAX(rmssd) AS max_rmssd,
+                   AVG(signal_quality) AS avg_sqi
+            FROM physio_readings WHERE window_type = 'hrv_5min'
+        """).fetchone()
+        if r and r["total"]:
+            print(f"  total windows : {r['total']}")
+            print(f"  valid RMSSD   : {r['valid_rmssd']}")
+            if r["valid_rmssd"]:
+                print(f"  RMSSD (ms)    : avg={r['avg_rmssd']:.1f}  "
+                      f"min={r['min_rmssd']:.1f}  max={r['max_rmssd']:.1f}")
+            print(f"  avg SQI       : {r['avg_sqi']:.2f}")
+        else:
+            print("  (no hrv_5min rows)")
+
+        # ── Desktop timestamp format ─────────────────────────────────────────
+        print("\n  Desktop timestamp format")
+        print(f"  {'-'*40}")
+        total_d  = conn.execute("SELECT COUNT(*) FROM desktop_readings").fetchone()[0]
+        n_t      = conn.execute(
+            "SELECT COUNT(*) FROM desktop_readings WHERE timestamp LIKE '%T%'"
+        ).fetchone()[0]
+        n_space  = conn.execute(
+            "SELECT COUNT(*) FROM desktop_readings WHERE timestamp NOT LIKE '%T%'"
+        ).fetchone()[0]
+        print(f"  total     : {total_d}")
+        print(f"  T-format  : {n_t}  (Flutter writes)")
+        print(f"  space-fmt : {n_space}  (Python writes; REPLACE() normalises both)")
+
+        # ── Aggregated window coverage ───────────────────────────────────────
+        print("\n  Aggregated windows - modality coverage")
+        print(f"  {'-'*40}")
+        r = conn.execute("""
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN avg_hr             IS NOT NULL THEN 1 ELSE 0 END) AS w_physio,
+                   SUM(CASE WHEN avg_valence         IS NOT NULL THEN 1 ELSE 0 END) AS w_face,
+                   SUM(CASE WHEN dominant_category   IS NOT NULL THEN 1 ELSE 0 END) AS w_desktop,
+                   SUM(CASE WHEN avg_rmssd           IS NOT NULL THEN 1 ELSE 0 END) AS w_rmssd,
+                   AVG(stress_index) AS avg_stress,
+                   MIN(stress_index) AS min_stress,
+                   MAX(stress_index) AS max_stress
+            FROM aggregated_windows
+        """).fetchone()
+        if r and r["total"]:
+            print(f"  total windows     : {r['total']}")
+            print(f"  with physio HR    : {r['w_physio']}")
+            print(f"  with face VA      : {r['w_face']}")
+            print(f"  with desktop data : {r['w_desktop']}")
+            print(f"  with RMSSD        : {r['w_rmssd']}")
+            if r["avg_stress"] is not None:
+                print(f"  stress_index      : avg={r['avg_stress']:.3f}  "
+                      f"min={r['min_stress']:.3f}  max={r['max_stress']:.3f}")
+        else:
+            print("  (no aggregated windows)")
+
+        print(f"\n{'='*W}\n")
+
+    except Exception as exc:
+        print(f"[DataHealth] ERROR: {exc}")
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _fmt(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
