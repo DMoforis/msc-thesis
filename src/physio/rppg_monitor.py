@@ -36,6 +36,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from src.camera.shared_feed import SharedCameraFeed
+from src.physio.hrv_processor import validate_hrv_metrics, _MAX_HR_DELTA
 from src.utils.config import (
     DB_PATH, CAMERA_INDEX, CAMERA_FPS,
     HR_WINDOW_SECONDS, HRV_WINDOW_SECONDS,
@@ -180,11 +181,8 @@ def run_monitor(feed: SharedCameraFeed) -> None:
     last_status      = time.monotonic()
     STATUS_INTERVAL  = 5.0   # seconds between "still running" console prints
 
-    # HR samples collected during the current HRV window — used for cross-validation.
-    # If the HRV window's inferred HR deviates by more than _MAX_HR_DELTA_FOR_HRV from
-    # the average of these 10s readings, the BVP peak series is considered inconsistent
-    # and HRV metrics are discarded for that window.
-    _MAX_HR_DELTA_FOR_HRV = 20.0   # BPM — maximum tolerable HR discrepancy
+    # HR samples collected during the current HRV window — used for cross-validation
+    # inside validate_hrv_metrics() (see src/physio/hrv_processor.py).
     hr_samples_for_hrv: list[float] = []
 
     print(f"\n[rPPG] Monitor started.")
@@ -284,36 +282,18 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                         sdnn_raw  = hrv.get("sdnn")
                         lf_hf     = hrv.get("LF/HF")
 
-                        # ── Cross-validate HR consistency ─────────────────────
-                        # If the HRV window's inferred HR diverges from the mean
-                        # of the 10s readings collected in the same window, the
-                        # BVP peak series is unreliable and HRV metrics are likely
-                        # artefactual.
-                        if hr_samples_for_hrv:
-                            avg_10s_hr   = sum(hr_samples_for_hrv) / len(hr_samples_for_hrv)
-                            hr_delta     = abs(hr - avg_10s_hr)
-                            hr_consistent = hr_delta <= _MAX_HR_DELTA_FOR_HRV
-                        else:
-                            avg_10s_hr    = hr
-                            hr_delta      = 0.0
-                            hr_consistent = True   # no 10s data yet — accept tentatively
+                        # ── Cross-validate and apply plausibility bounds ──────
+                        rmssd, sdnn = validate_hrv_metrics(
+                            rmssd_raw, sdnn_raw, hr, hr_samples_for_hrv
+                        )
 
-                        # ── Plausibility bounds ───────────────────────────────
-                        # Normal adult RMSSD at rest/work: ~15–60 ms (80 ms ceiling
-                        # for high-HRV individuals). SDNN ceiling: 150 ms.
-                        # rPPG-derived peaks have more jitter than ECG, so even
-                        # values that clear SQI > 0.5 can still be inflated —
-                        # the strict upper bounds are the primary quality gate.
-                        rmssd = (
-                            round(rmssd_raw, 1)
-                            if (rmssd_raw and 5.0 < rmssd_raw < 80.0 and hr_consistent)
-                            else None
-                        )
-                        sdnn = (
-                            round(sdnn_raw, 1)
-                            if (sdnn_raw and 5.0 < sdnn_raw < 150.0 and hr_consistent)
-                            else None
-                        )
+                        # For the console report we still need avg_10s_hr / hr_delta
+                        if hr_samples_for_hrv:
+                            avg_10s_hr = sum(hr_samples_for_hrv) / len(hr_samples_for_hrv)
+                            hr_delta   = abs(hr - avg_10s_hr)
+                        else:
+                            avg_10s_hr = hr
+                            hr_delta   = 0.0
 
                         if 30.0 < hr < 220.0:
                             save_reading(
@@ -343,7 +323,7 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                                   f"{lf_hf:.2f}" if lf_hf else
                                   f"  LF/HF         : --")
                             print(f"  Signal quality: {sqi:.2f} / 1.00")
-                            if not hr_consistent:
+                            if hr_delta > _MAX_HR_DELTA:
                                 print(f"  *** HR inconsistency ({hr_delta:.1f} BPM) - HRV discarded")
                             print(f"{'-'*52}\n")
                         else:
