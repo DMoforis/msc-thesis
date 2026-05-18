@@ -39,10 +39,10 @@ W_FACE    = 0.4
 W_DESKTOP = 0.2
 
 # ── Intervention thresholds ───────────────────────────────────────────────────
-STRESS_TRIGGER_THRESHOLD   = 0.10   # stress_index > this for 2 consecutive windows
+STRESS_TRIGGER_THRESHOLD   = 0.65   # stress_index > this for 2 consecutive windows
 VALENCE_TRIGGER_THRESHOLD  = -0.4   # negative valence sustained ≥ 10 min
 AROUSAL_LOW_THRESHOLD      = 0.2    # disengagement sustained ≥ 15 min
-MIN_MINUTES_BETWEEN_NOTIFS = 0     # cooldown between notifications
+MIN_MINUTES_BETWEEN_NOTIFS = 15     # cooldown between notifications
 
 # ── Ollama LLM ────────────────────────────────────────────────────────────────
 OLLAMA_MODEL   = "llama3.1:8b"
