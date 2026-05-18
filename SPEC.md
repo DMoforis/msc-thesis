@@ -254,7 +254,7 @@ Desktop score:
 
 **File:** `src/wellbeing/notifier.py`
 
-**Library:** `plyer` (cross-platform, works on Windows 11)
+**Library:** `windows-toasts` (WinRT native toasts, Windows 10/11)
 
 **Interface:**
 ```python
@@ -363,7 +363,7 @@ It uses the RTX 2060 Super automatically via CUDA.
 ```powershell
 pip install transformers torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 pip install ollama
-pip install plyer
+pip install windows-toasts
 pip install openpyxl
 pip install pandas
 pip install Pillow

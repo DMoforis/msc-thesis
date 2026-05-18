@@ -190,10 +190,16 @@ def _build_prompt(ctx: dict) -> str:
     last_brk = ctx.get("minutes_since_break")
     blinks   = ctx.get("blink_rate")
 
-    v_str = f"{valence:+.2f}" if valence is not None else "N/A"
-    a_str = f"{arousal:+.2f}" if arousal is not None else "N/A"
-    b_str = f"{blinks:.1f}/min" if blinks is not None else "N/A"
-    lb_str = f"{last_brk} min ago" if last_brk is not None else "unknown"
+    v_str     = f"{valence:+.2f}" if valence is not None else "N/A"
+    a_str     = f"{arousal:+.2f}" if arousal is not None else "N/A"
+    b_str     = f"{blinks:.1f}/min" if blinks is not None else "N/A"
+    lb_str    = f"{last_brk} min ago" if last_brk is not None else "unknown"
+    emo_label = ctx.get("emotion_label")
+
+    if emo_label is not None:
+        emo_line = f"- Emotional state: {emo_label} (valence={v_str}, arousal={a_str})\n"
+    else:
+        emo_line = f"- Emotional state: valence={v_str}, arousal={a_str}\n"
 
     return (
         "System: You are a well-being assistant for a knowledge worker.\n"
@@ -202,8 +208,8 @@ def _build_prompt(ctx: dict) -> str:
         "Context:\n"
         f"- Current activity: {cat} in {window}\n"
         f"- Stress index: {stress:.2f}/1.0\n"
-        f"- Emotional state: valence={v_str}, arousal={a_str}\n"
-        f"- Session duration: {session} minutes\n"
+        + emo_line
+        + f"- Session duration: {session} minutes\n"
         f"- Last break: {lb_str}\n"
         f"- Blink rate: {b_str} (normal: 15-20)\n\n"
         "Generate a recommendation:"

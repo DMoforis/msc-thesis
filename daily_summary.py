@@ -21,6 +21,7 @@ if _ROOT not in sys.path:
 
 from src.utils.db import open_db
 from src.utils.config import DB_PATH, EXPORT_DIR
+from src.utils.emotion_labels import get_emotion_label
 
 # ── Colorama ──────────────────────────────────────────────────────────────────
 try:
@@ -357,6 +358,9 @@ def print_emotional(out: _Out, data: dict) -> None:
         _row(out, "Arousal", dim("--"))
 
     if avg_v is not None and avg_a is not None:
+        emo = get_emotion_label(avg_v, avg_a)
+        _row(out, "Primary emotion",
+             f"{bold(emo['primary'])}  ({emo['intensity']} intensity)")
         _row(out, "Predominant state", _quadrant_label(avg_v, avg_a))
 
 

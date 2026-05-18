@@ -125,7 +125,7 @@ Key packages installed via `requirements.txt`:
 | `neurokit2` | HRV signal processing utilities |
 | `opencv-python` | Camera capture and frame processing |
 | `pandas`, `openpyxl` | Excel export |
-| `plyer` | Windows desktop notifications |
+| `windows-toasts` | Native Windows 10/11 toast notifications (WinRT) |
 | `colorama` | Colour-coded terminal output for daily summaries |
 
 ### Ollama — local LLM runtime

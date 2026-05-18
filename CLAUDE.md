@@ -58,7 +58,7 @@ All processing is **fully local** — no data leaves the machine. Privacy-by-des
 | Local LLM | Ollama + Llama 3.2 8B (GPU via CUDA) |
 | Database | SQLite (shared, local) |
 | Excel export | openpyxl + pandas |
-| Windows notifications | win10toast or plyer |
+| Windows notifications | windows-toasts (WinRT) |
 | Desktop context | Flutter + win32 Windows API |
 | Fusion layer | Python, weighted late fusion |
 

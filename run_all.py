@@ -80,12 +80,12 @@ def _probe_ollama() -> str:
         return "fallback  (pip install ollama)"
 
 
-def _probe_plyer() -> str:
+def _probe_windows_toasts() -> str:
     try:
-        import plyer  # noqa: F401
+        from windows_toasts import WindowsToaster  # noqa: F401
         return "READY"
     except ImportError:
-        return "fallback  (pip install plyer)"
+        return "fallback  (pip install windows-toasts)"
 
 
 def _probe_torch() -> str:
@@ -386,7 +386,7 @@ def main() -> None:
 
     # ── Optional dependency probes ────────────────────────────────────────────
     ollama_status = _probe_ollama()
-    plyer_status  = _probe_plyer()
+    notifier_status = _probe_windows_toasts()
     torch_status  = _probe_torch()
 
     # ── Camera ────────────────────────────────────────────────────────────────
@@ -438,7 +438,7 @@ def main() -> None:
         ("VA model (EmoNet)", torch_status),
         ("Aggregator",        agg_status),
         ("LLM classifier",    ollama_status),
-        ("Notifier",          plyer_status),
+        ("Notifier",          notifier_status),
         ("Flutter desktop",   flutter_status),
     ])
 

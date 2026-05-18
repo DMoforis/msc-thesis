@@ -41,6 +41,7 @@ if _ROOT not in sys.path:
 
 from src.camera.shared_feed import SharedCameraFeed
 from src.face.valence_arousal import ValenceArousalPredictor
+from src.utils.emotion_labels import get_emotion_label
 from src.utils.config import (
     DB_PATH, CAMERA_INDEX, CAMERA_FPS,
     FACE_WINDOW_SECONDS,
@@ -88,7 +89,7 @@ def init_database(db_path: str = DB_PATH) -> sqlite3.Connection:
 
     # Add Phase 2 columns to tables created by Phase 1 schema (safe no-ops
     # if columns already exist — OperationalError is expected and swallowed).
-    for col in ("valence REAL", "arousal REAL"):
+    for col in ("valence REAL", "arousal REAL", "emotion_label TEXT"):
         try:
             conn.execute(f"ALTER TABLE face_readings ADD COLUMN {col}")
             conn.commit()
@@ -109,6 +110,7 @@ def save_reading(
     face_pct: float,
     valence: float | None = None,
     arousal: float | None = None,
+    emotion_label: str | None = None,
 ) -> None:
     """Insert one facial feature reading for the current window."""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -116,9 +118,9 @@ def save_reading(
         INSERT INTO face_readings
             (timestamp, blink_rate, mean_ear,
              pitch_deg, yaw_deg, roll_deg, face_detected_pct,
-             valence, arousal)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (ts, blink_rate, mean_ear, pitch, yaw, roll, face_pct, valence, arousal))
+             valence, arousal, emotion_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (ts, blink_rate, mean_ear, pitch, yaw, roll, face_pct, valence, arousal, emotion_label))
     conn.commit()
     print(f"[DB] Saved → {ts} | "
           f"Blinks/min: {blink_rate:.1f} | EAR: {mean_ear:.3f} | "
@@ -371,17 +373,19 @@ class FaceModule:
         mean_roll  = float(np.mean(self.roll_history))  if self.roll_history  else 0.0
 
         # VA: run EmoNet on the most recent face crop from this window
-        va = self._va.predict(self._last_face_crop) if self._last_face_crop is not None else None
+        va  = self._va.predict(self._last_face_crop) if self._last_face_crop is not None else None
+        emo = get_emotion_label(va[0], va[1]) if va else None
 
         return {
-            "blink_rate": round(blink_rate, 1),
-            "mean_ear":   round(mean_ear,   3),
-            "pitch":      round(mean_pitch, 1),
-            "yaw":        round(mean_yaw,   1),
-            "roll":       round(mean_roll,  1),
-            "face_pct":   round(face_pct,   1),
-            "valence":    va[0] if va else None,
-            "arousal":    va[1] if va else None,
+            "blink_rate":    round(blink_rate, 1),
+            "mean_ear":      round(mean_ear,   3),
+            "pitch":         round(mean_pitch, 1),
+            "yaw":           round(mean_yaw,   1),
+            "roll":          round(mean_roll,  1),
+            "face_pct":      round(face_pct,   1),
+            "valence":       va[0] if va else None,
+            "arousal":       va[1] if va else None,
+            "emotion_label": emo["primary"] if emo else None,
         }
 
 
@@ -443,17 +447,18 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                 if reading:
                     save_reading(
                         conn,
-                        blink_rate = reading["blink_rate"],
-                        mean_ear   = reading["mean_ear"],
-                        pitch      = reading["pitch"],
-                        yaw        = reading["yaw"],
-                        roll       = reading["roll"],
-                        face_pct   = reading["face_pct"],
-                        valence    = reading["valence"],
-                        arousal    = reading["arousal"],
+                        blink_rate    = reading["blink_rate"],
+                        mean_ear      = reading["mean_ear"],
+                        pitch         = reading["pitch"],
+                        yaw           = reading["yaw"],
+                        roll          = reading["roll"],
+                        face_pct      = reading["face_pct"],
+                        valence       = reading["valence"],
+                        arousal       = reading["arousal"],
+                        emotion_label = reading["emotion_label"],
                     )
-                    v_str = f"{reading['valence']:+.3f}" if reading['valence'] is not None else "—"
-                    a_str = f"{reading['arousal']:+.3f}" if reading['arousal'] is not None else "—"
+                    v_str = f"{reading['valence']:+.3f}" if reading['valence'] is not None else "--"
+                    a_str = f"{reading['arousal']:+.3f}" if reading['arousal'] is not None else "--"
                     print(f"\n{'─'*48}")
                     print(f"  Blink rate  : {reading['blink_rate']:.1f} blinks/min")
                     print(f"  Mean EAR    : {reading['mean_ear']:.3f}")
@@ -462,6 +467,8 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                     print(f"  Head roll   : {reading['roll']:.1f}°")
                     print(f"  Face visible: {reading['face_pct']:.0f}% of window")
                     print(f"  Valence     : {v_str}   Arousal: {a_str}")
+                    if reading["emotion_label"]:
+                        print(f"  Emotion     : {reading['emotion_label']}")
                     print(f"{'─'*48}\n")
                 else:
                     print("[Face] Too few frames with face detected. "
