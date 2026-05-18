@@ -5,33 +5,34 @@
 
   SESSION OVERVIEW
   ---------------------------------------------------------------
-  Monitoring time       : 5 min  (12:43 to 12:48)
-  5-min windows         : 1
+  Monitoring time       : 33 min  (23:28 to 00:02)
+  5-min windows         : 6
   Interventions         : 0
 
   STRESS SUMMARY
   ---------------------------------------------------------------
-  Average index         : 0.151  [ Low ]
-  Peak stress           : 12:43  |  IDE/Terminal              (index: 0.151)
-  Most relaxed          : 12:43  |  IDE/Terminal              (index: 0.151)
+  Average index         : 0.132  [ Low ]
+  Peak stress           : 23:57  |  Browser                   (index: 0.188)
+  Most relaxed          : 23:28  |  Browser                   (index: 0.044)
 
   PHYSIOLOGICAL
   ---------------------------------------------------------------
-  Average heart rate    : 58.0 BPM
-  Signal quality        : 0.58 / 1.00  [ Fair ]
-  RMSSD                 : 92.7 ms  (1 / 1 HRV windows valid)
+  Average heart rate    : 67.9 BPM
+  Signal quality        : 0.52 / 1.00  [ Fair ]
+  RMSSD                 : 81.2 ms  (4 / 5 HRV windows valid)
 
   EMOTIONAL STATE
   ---------------------------------------------------------------
-  Valence               : -0.029  [ Neutral ]
-  Arousal               : +0.198  [ Moderate ]
+  Valence               : +0.112  [ Neutral ]
+  Arousal               : +0.158  [ Moderate ]
+  Primary emotion       : Neutral  (low intensity)
   Predominant state     : Balanced / attentive
 
   DESKTOP ACTIVITY
   ---------------------------------------------------------------
-  Main activity         : IDE/Terminal  (100% of session)
-  Activity level        : 50%
-  Window switches       : 19 total
+  Main activity         : Browser  (100% of session)
+  Activity level        : 63%
+  Window switches       : 38 total
   Longest idle period   : 30 sec
 
   INTERVENTIONS  (0 triggered)
@@ -39,6 +40,6 @@
   No interventions triggered - good session!
 
  =================================================================
-  Generated 2026-05-18 15:06:49
+  Generated 2026-05-19 00:08:43
  =================================================================
 

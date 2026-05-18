@@ -1,0 +1,36 @@
+
+ =================================================================
+  DAILY MONITORING SUMMARY  |  2026-05-19
+ =================================================================
+
+  SESSION OVERVIEW
+  ---------------------------------------------------------------
+  5-min windows         : 0 — no data found for this date
+
+  STRESS SUMMARY
+  ---------------------------------------------------------------
+  Stress index          : -- (no scored windows)
+
+  PHYSIOLOGICAL
+  ---------------------------------------------------------------
+  Average heart rate    : 75.5 BPM
+  Signal quality        : 0.39 / 1.00  [ Poor — results less reliable ]
+  RMSSD                 : -- (0 / 1 windows had sufficient signal)
+
+  EMOTIONAL STATE
+  ---------------------------------------------------------------
+  Valence / Arousal     : -- (face data unavailable)
+
+  DESKTOP ACTIVITY
+  ---------------------------------------------------------------
+  App data              : -- (no desktop readings for this date)
+  Tip                   : ensure the Flutter desktop app was running
+
+  INTERVENTIONS  (0 triggered)
+  ---------------------------------------------------------------
+  No interventions triggered - good session!
+
+ =================================================================
+  Generated 2026-05-19 00:07:35
+ =================================================================
+

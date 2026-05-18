@@ -40,9 +40,23 @@ W_DESKTOP = 0.2
 
 # ── Intervention thresholds ───────────────────────────────────────────────────
 STRESS_TRIGGER_THRESHOLD   = 0.65   # stress_index > this for 2 consecutive windows
-VALENCE_TRIGGER_THRESHOLD  = -0.4   # negative valence sustained ≥ 10 min
-AROUSAL_LOW_THRESHOLD      = 0.2    # disengagement sustained ≥ 15 min
-MIN_MINUTES_BETWEEN_NOTIFS = 15     # cooldown between notifications
+VALENCE_TRIGGER_THRESHOLD  = -0.4   # kept for backwards compatibility
+AROUSAL_LOW_THRESHOLD      = 0.2    # kept for backwards compatibility
+MIN_MINUTES_BETWEEN_NOTIFS = 15     # cooldown between notifications (minutes)
+
+# Per-condition thresholds (multi-trigger system)
+DISENGAGEMENT_VALENCE_THRESHOLD   = -0.30  # avg_valence below this → low mood
+DISENGAGEMENT_AROUSAL_THRESHOLD   = -0.15  # avg_arousal below this → low energy
+DISENGAGEMENT_ACTIVITY_MAX        = 50.0   # avg_activity_pct must also be below this
+NEGATIVE_AFFECT_VALENCE_THRESHOLD = -0.35  # avg_valence below this → tense/anxious
+NEGATIVE_AFFECT_AROUSAL_MIN       = 0.20   # avg_arousal above this → activated
+EYE_STRAIN_BLINK_THRESHOLD        = 8.0    # blinks/min below this → screen fixation
+IDLE_ACTIVITY_THRESHOLD           = 15.0   # avg_activity_pct below this → near idle
+FLOW_STRESS_CEILING               = 0.20   # stress_index must be below this
+FLOW_ACTIVITY_FLOOR               = 65.0   # avg_activity_pct must be above this
+FLOW_VALENCE_FLOOR                = 0.10   # avg_valence must be above this
+MIN_MINUTES_BETWEEN_FLOW_NOTIFS   = 30     # separate cooldown for positive_flow
+MAX_FLOW_NOTIFS_PER_SESSION       = 1      # positive_flow fires at most once
 
 # ── Ollama LLM ────────────────────────────────────────────────────────────────
 OLLAMA_MODEL   = "llama3.1:8b"

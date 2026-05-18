@@ -9,6 +9,7 @@ __pycache__/
 # Database — contains personal biometric data, not committed
 *.db
 data/stress_monitor_dev_archive*.db
+data/stress_monitor_test*.db
 
 # Flutter build artifacts
 src/desktop/build/

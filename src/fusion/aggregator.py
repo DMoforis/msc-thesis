@@ -12,12 +12,16 @@ Role
   - Computes summary statistics (means, dominant category, total switches)
   - Calls LateFusion.score() to produce a single stress_index
   - Saves the result to aggregated_windows
-  - Applies intervention trigger logic and sets intervention_triggered flag
+  - Applies multi-condition trigger logic and fires notifications
 
-Intervention trigger rules (from SPEC §5 + config.py):
-  1. stress_index > STRESS_TRIGGER_THRESHOLD for 2 consecutive windows
-  2. avg_valence < VALENCE_TRIGGER_THRESHOLD in the current window
-  3. Cooldown: MIN_MINUTES_BETWEEN_NOTIFS between any two triggers
+Intervention trigger rules (OR logic — any single condition is sufficient):
+  1. high_stress      — stress_index > threshold for 2 consecutive windows
+  2. disengagement    — low valence + low arousal + low activity, 2 windows
+  3. negative_affect  — low valence + elevated arousal, 2 windows
+  4. eye_strain       — blink_rate < 8/min for 2 consecutive windows
+  5. prolonged_idle   — activity_pct < 15% for 3 consecutive windows
+  6. positive_flow    — calm + engaged + positive mood, 2 windows;
+                        30-min cooldown, once per session maximum
 
 Usage
 -----
@@ -47,8 +51,19 @@ from src.utils.config import (
     DB_PATH,
     AGGREGATION_MINUTES,
     STRESS_TRIGGER_THRESHOLD,
-    VALENCE_TRIGGER_THRESHOLD,
     MIN_MINUTES_BETWEEN_NOTIFS,
+    DISENGAGEMENT_VALENCE_THRESHOLD,
+    DISENGAGEMENT_AROUSAL_THRESHOLD,
+    DISENGAGEMENT_ACTIVITY_MAX,
+    NEGATIVE_AFFECT_VALENCE_THRESHOLD,
+    NEGATIVE_AFFECT_AROUSAL_MIN,
+    EYE_STRAIN_BLINK_THRESHOLD,
+    IDLE_ACTIVITY_THRESHOLD,
+    FLOW_STRESS_CEILING,
+    FLOW_ACTIVITY_FLOOR,
+    FLOW_VALENCE_FLOOR,
+    MIN_MINUTES_BETWEEN_FLOW_NOTIFS,
+    MAX_FLOW_NOTIFS_PER_SESSION,
 )
 from src.utils.db import (
     open_db,
@@ -58,6 +73,19 @@ from src.utils.db import (
     fetch_desktop_window,
 )
 from src.fusion.late_fusion import LateFusion
+from src.wellbeing.notifier import WindowsNotifier
+from src.llm.recommender import WellbeingRecommender
+
+
+# ── Notification titles per trigger type ─────────────────────────────────────
+_TRIGGER_TITLES: dict[str, str] = {
+    "high_stress":     "Stress Check",
+    "disengagement":   "Time to Re-engage",
+    "negative_affect": "Taking a Breath",
+    "eye_strain":      "Eye Strain Alert",
+    "prolonged_idle":  "Still With Us?",
+    "positive_flow":   "You Are in the Zone!",
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -78,14 +106,28 @@ class Aggregator:
     """
 
     def __init__(self, db_path: str = DB_PATH):
-        self._db_path   = db_path
-        self._fusion    = LateFusion()
-        self._stop      = threading.Event()
+        self._db_path        = db_path
+        self._fusion         = LateFusion()
+        self._stop           = threading.Event()
         self._thread: threading.Thread | None = None
+        self._session_start  = datetime.now()
 
-        # Intervention trigger state (accessed only from background thread)
-        self._consecutive_stress:    int              = 0
+        # Consecutive-window counters (accessed only from background thread)
+        self._consecutive_stress          = 0
+        self._consecutive_disengagement   = 0
+        self._consecutive_negative_affect = 0
+        self._consecutive_eye_strain      = 0
+        self._consecutive_idle            = 0
+        self._consecutive_flow            = 0
+
+        # Cooldown / session-cap state
         self._last_intervention_time: datetime | None = None
+        self._last_flow_notif_time:   datetime | None = None
+        self._flow_notifs_sent: int = 0
+
+        # Notification components (graceful degradation handled internally)
+        self._notifier    = WindowsNotifier(db_path=self._db_path)
+        self._recommender = WellbeingRecommender()
 
     # ── Context manager ───────────────────────────────────────────────────────
 
@@ -151,7 +193,7 @@ class Aggregator:
             desktop_rows = fetch_desktop_window(conn, window_start, window_end)
 
             # Diagnostic: confirm desktop rows are being picked up
-            print(f"[Aggregator] window {window_start:%H:%M}–{window_end:%H:%M} | "
+            print(f"[Aggregator] window {window_start:%H:%M}-{window_end:%H:%M} | "
                   f"physio={len(physio_rows)} face={len(face_rows)} desktop={len(desktop_rows)}")
             if desktop_rows:
                 r0 = desktop_rows[0]
@@ -164,8 +206,12 @@ class Aggregator:
             face_agg    = self._aggregate_face(face_rows)
             desktop_agg = self._aggregate_desktop(desktop_rows)
 
-            stress_index = self._fusion.score(physio_agg, face_agg, desktop_agg)
-            triggered    = self._check_intervention(stress_index, face_agg)
+            stress_index   = self._fusion.score(physio_agg, face_agg, desktop_agg)
+            trigger_reason = self._check_interventions(stress_index, face_agg, desktop_agg)
+            triggered      = trigger_reason is not None
+
+            if trigger_reason:
+                self._fire_intervention(trigger_reason, stress_index, face_agg, desktop_agg)
 
             self._save_window(
                 conn, window_start, window_end,
@@ -175,7 +221,7 @@ class Aggregator:
             self._print_summary(
                 window_start, window_end,
                 physio_agg, face_agg, desktop_agg,
-                stress_index, triggered,
+                stress_index, trigger_reason,
             )
 
         except Exception as exc:
@@ -232,41 +278,156 @@ class Aggregator:
 
     # ── Intervention trigger ──────────────────────────────────────────────────
 
-    def _check_intervention(self, stress_index: float, face_agg: dict) -> bool:
+    def _check_interventions(
+        self,
+        stress_index: float,
+        face_agg:     dict,
+        desktop_agg:  dict,
+    ) -> str | None:
         """
-        Return True when an intervention should be triggered.
+        Evaluate all six trigger conditions and return the trigger reason
+        string of the first condition that fires, or None if nothing fires.
 
-        Rules (evaluated in order):
-          1. Cooldown: skip if MIN_MINUTES_BETWEEN_NOTIFS has not elapsed.
-          2. stress_index above threshold for 2 consecutive windows.
-          3. avg_valence below VALENCE_TRIGGER_THRESHOLD in this window.
+        All consecutive counters are updated every call so they reflect the
+        true run of windows meeting each condition — including windows where
+        the standard cooldown blocked firing. After cooldown expires, the
+        counter is already at threshold, so the trigger fires on the first
+        eligible window rather than requiring another two-window run.
+
+        positive_flow uses its own 30-minute cooldown and a once-per-session
+        cap, evaluated independently of the standard cooldown.
         """
-        # Rule 1 — cooldown
-        if self._last_intervention_time is not None:
-            elapsed_min = (
-                datetime.now() - self._last_intervention_time
-            ).total_seconds() / 60.0
-            if elapsed_min < MIN_MINUTES_BETWEEN_NOTIFS:
-                return False
+        now = datetime.now()
 
-        # Rule 2 — consecutive high stress
+        standard_cooldown_ok = (
+            self._last_intervention_time is None
+            or (now - self._last_intervention_time).total_seconds() / 60.0
+               >= MIN_MINUTES_BETWEEN_NOTIFS
+        )
+
+        # ── Extract signals ───────────────────────────────────────────────
+        valence  = face_agg.get("avg_valence")
+        arousal  = face_agg.get("avg_arousal")
+        blinks   = face_agg.get("avg_blink_rate")
+        activity = desktop_agg.get("avg_activity_pct")
+
+        # ── Update all consecutive counters ───────────────────────────────
+
+        # (1) high_stress
         if stress_index >= STRESS_TRIGGER_THRESHOLD:
             self._consecutive_stress += 1
         else:
             self._consecutive_stress = 0
 
-        if self._consecutive_stress >= 2:
-            self._consecutive_stress     = 0
-            self._last_intervention_time = datetime.now()
-            return True
+        # (2) disengagement: low mood + low energy + low activity
+        if (valence  is not None and valence  < DISENGAGEMENT_VALENCE_THRESHOLD
+                and arousal  is not None and arousal  < DISENGAGEMENT_AROUSAL_THRESHOLD
+                and activity is not None and activity < DISENGAGEMENT_ACTIVITY_MAX):
+            self._consecutive_disengagement += 1
+        else:
+            self._consecutive_disengagement = 0
 
-        # Rule 3 — sustained negative valence
-        valence = face_agg.get("avg_valence")
-        if valence is not None and valence < VALENCE_TRIGGER_THRESHOLD:
-            self._last_intervention_time = datetime.now()
-            return True
+        # (3) negative_affect: low valence + elevated arousal (tense/anxious)
+        if (valence is not None and valence < NEGATIVE_AFFECT_VALENCE_THRESHOLD
+                and arousal is not None and arousal > NEGATIVE_AFFECT_AROUSAL_MIN):
+            self._consecutive_negative_affect += 1
+        else:
+            self._consecutive_negative_affect = 0
 
-        return False
+        # (4) eye_strain: blink rate below healthy threshold
+        if blinks is not None and blinks < EYE_STRAIN_BLINK_THRESHOLD:
+            self._consecutive_eye_strain += 1
+        else:
+            self._consecutive_eye_strain = 0
+
+        # (5) prolonged_idle: near-zero activity (needs 3 windows = 15 min)
+        if activity is not None and activity < IDLE_ACTIVITY_THRESHOLD:
+            self._consecutive_idle += 1
+        else:
+            self._consecutive_idle = 0
+
+        # (6) positive_flow: calm + engaged + positive mood
+        if (stress_index < FLOW_STRESS_CEILING
+                and activity is not None and activity > FLOW_ACTIVITY_FLOOR
+                and valence  is not None and valence  > FLOW_VALENCE_FLOOR):
+            self._consecutive_flow += 1
+        else:
+            self._consecutive_flow = 0
+
+        # ── Evaluate standard-cooldown triggers (priority order) ──────────
+        if standard_cooldown_ok:
+            trigger = None
+            if self._consecutive_stress >= 2:
+                trigger = "high_stress"
+                self._consecutive_stress = 0
+            elif self._consecutive_disengagement >= 2:
+                trigger = "disengagement"
+                self._consecutive_disengagement = 0
+            elif self._consecutive_negative_affect >= 2:
+                trigger = "negative_affect"
+                self._consecutive_negative_affect = 0
+            elif self._consecutive_eye_strain >= 2:
+                trigger = "eye_strain"
+                self._consecutive_eye_strain = 0
+            elif self._consecutive_idle >= 3:
+                trigger = "prolonged_idle"
+                self._consecutive_idle = 0
+
+            if trigger:
+                self._last_intervention_time = now
+                return trigger
+
+        # ── Positive flow: separate cooldown + once-per-session cap ───────
+        flow_cooldown_ok = (
+            self._last_flow_notif_time is None
+            or (now - self._last_flow_notif_time).total_seconds() / 60.0
+               >= MIN_MINUTES_BETWEEN_FLOW_NOTIFS
+        )
+        if (self._consecutive_flow >= 2
+                and self._flow_notifs_sent < MAX_FLOW_NOTIFS_PER_SESSION
+                and flow_cooldown_ok):
+            self._consecutive_flow    = 0
+            self._last_flow_notif_time = now
+            self._flow_notifs_sent    += 1
+            return "positive_flow"
+
+        return None
+
+    def _fire_intervention(
+        self,
+        trigger_reason: str,
+        stress_index:   float,
+        face_agg:       dict,
+        desktop_agg:    dict,
+    ) -> None:
+        """Build context, generate a recommendation, and send a notification."""
+        try:
+            session_min = int(
+                (datetime.now() - self._session_start).total_seconds() / 60
+            )
+            context = {
+                "trigger_reason":      trigger_reason,
+                "app_category":        desktop_agg.get("dominant_category") or "Unknown",
+                "stress_index":        stress_index,
+                "valence":             face_agg.get("avg_valence"),
+                "arousal":             face_agg.get("avg_arousal"),
+                "session_minutes":     session_min,
+                "minutes_since_break": None,
+                "blink_rate":          face_agg.get("avg_blink_rate"),
+                "avg_activity_pct":    desktop_agg.get("avg_activity_pct"),
+            }
+            message = self._recommender.generate(context)
+            title   = _TRIGGER_TITLES.get(trigger_reason, "Well-being Check")
+            self._notifier.send(
+                title          = title,
+                message        = message,
+                trigger_reason = trigger_reason,
+                stress_index   = stress_index,
+                valence        = face_agg.get("avg_valence"),
+                arousal        = face_agg.get("avg_arousal"),
+            )
+        except Exception as exc:
+            print(f"[Aggregator] Intervention delivery error: {exc}")
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -321,8 +482,8 @@ class Aggregator:
     def _print_summary(
         t0: datetime, t1: datetime,
         physio: dict, face: dict, desktop: dict,
-        stress_index: float,
-        triggered: bool,
+        stress_index:   float,
+        trigger_reason: str | None,
     ) -> None:
         hr_str = f"{physio['avg_hr']:.1f} BPM" if physio["avg_hr"] else "--"
         v_str  = f"{face['avg_valence']:+.2f}"  if face["avg_valence"] else "--"
@@ -333,15 +494,15 @@ class Aggregator:
         bar     = "#" * bar_len + "-" * (20 - bar_len)
 
         print(f"\n{'='*52}")
-        print(f"  5-min window  {t0:%H:%M} – {t1:%H:%M}")
+        print(f"  5-min window  {t0:%H:%M} - {t1:%H:%M}")
         print(f"{'='*52}")
         print(f"  HR:            {hr_str}")
         print(f"  Valence/Arousal: {v_str} / {a_str}")
         print(f"  Activity:      {desktop['avg_activity_pct']:.0f}%" if desktop["avg_activity_pct"] else "  Activity:      --")
         print(f"  App category:  {cat}")
         print(f"  Stress index:  [{bar}] {stress_index:.3f}")
-        if triggered:
-            print(f"  *** INTERVENTION TRIGGERED ***")
+        if trigger_reason:
+            print(f"  *** INTERVENTION: {trigger_reason.upper()} ***")
         print(f"{'='*52}\n")
 
 

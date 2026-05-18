@@ -51,27 +51,46 @@ _TEMPLATES: dict[str, list[str]] = {
         "Your stress indicators are elevated. A 5-minute walk away from the screen can help.",
         "Tension detected. Roll your shoulders back, take three slow breaths, then continue.",
     ],
-    "negative_valence": [
-        "You seem frustrated. Step away for 5 minutes — returning with fresh eyes often helps.",
-        "Low mood detected. A brief change of scenery or a glass of water can shift perspective.",
-        "Long focus streak with low mood — a short break now may improve productivity overall.",
+    "disengagement": [
+        "You seem disengaged. Identify the next one task and work on it for just 10 minutes.",
+        "Low engagement detected. Try the Pomodoro technique: 25 min focused, 5 min break.",
+        "Feeling flat? A short walk — even just to another room — can reset your energy.",
+    ],
+    "negative_affect": [
+        "You seem tense. Try box breathing: inhale 4 seconds, hold 4, exhale 4, hold 4.",
+        "Tension signals detected. A 2-minute breathing exercise can reset your focus.",
     ],
     "eye_strain": [
         "Blink rate is low — apply the 20-20-20 rule: look 20 feet away for 20 seconds now.",
         "Eye strain detected. Close your eyes for 20 seconds and let them rest.",
     ],
-    "disengagement": [
-        "You seem disengaged. Identify the next one task and work on it for just 10 minutes.",
-        "Low engagement detected. Try the Pomodoro technique: 25 min focused, 5 min break.",
-    ],
     "prolonged_idle": [
         "You've been idle for a while. Check in: are you stuck? Breaking the task down may help.",
         "Long idle period. Even a small action — writing a note, drafting a line — builds momentum.",
+    ],
+    "positive_flow": [
+        "You are in great flow right now. Keep it up and remember to take a short break soon!",
+        "Strong focus and positive signals — excellent work. Stay hydrated and keep going!",
+    ],
+    "negative_valence": [
+        "You seem frustrated. Step away for 5 minutes — returning with fresh eyes often helps.",
+        "Low mood detected. A brief change of scenery or a glass of water can shift perspective.",
     ],
     "default": [
         "You've been working a while. A 5-minute break will help you sustain focus longer.",
         "Time for a short pause. Stand up, stretch, and return refreshed.",
     ],
+}
+
+# ── Per-trigger guidance injected into the LLM system prompt ──────────────────
+_TRIGGER_GUIDANCE: dict[str, str] = {
+    "high_stress":     "Suggest a break, breathing exercise, or physical movement.",
+    "disengagement":   "Suggest task switching, a short walk, or a refocusing technique.",
+    "negative_affect": "Suggest a breathing exercise or brief mindfulness activity.",
+    "eye_strain":      "Suggest the 20-20-20 rule: look 20 feet away for 20 seconds.",
+    "prolonged_idle":  "Gently nudge the user to re-engage with their work.",
+    "positive_flow":   "Give genuine brief encouragement and acknowledge the good work.",
+    "default":         "Be specific and actionable.",
 }
 
 _TEMPLATE_INDEX: dict[str, int] = {}   # rotating pointer per trigger type
@@ -189,12 +208,14 @@ def _build_prompt(ctx: dict) -> str:
     session  = ctx.get("session_minutes", 0) or 0
     last_brk = ctx.get("minutes_since_break")
     blinks   = ctx.get("blink_rate")
+    trigger  = ctx.get("trigger_reason", "default")
 
     v_str     = f"{valence:+.2f}" if valence is not None else "N/A"
     a_str     = f"{arousal:+.2f}" if arousal is not None else "N/A"
     b_str     = f"{blinks:.1f}/min" if blinks is not None else "N/A"
     lb_str    = f"{last_brk} min ago" if last_brk is not None else "unknown"
     emo_label = ctx.get("emotion_label")
+    guidance  = _TRIGGER_GUIDANCE.get(trigger, _TRIGGER_GUIDANCE["default"])
 
     if emo_label is not None:
         emo_line = f"- Emotional state: {emo_label} (valence={v_str}, arousal={a_str})\n"
@@ -204,8 +225,10 @@ def _build_prompt(ctx: dict) -> str:
     return (
         "System: You are a well-being assistant for a knowledge worker.\n"
         "Generate ONE short, friendly recommendation (max 2 sentences).\n"
-        "Be specific, not generic. Never mention medical advice.\n\n"
+        f"{guidance}\n"
+        "Never mention medical advice.\n\n"
         "Context:\n"
+        f"- Trigger: {trigger}\n"
         f"- Current activity: {cat} in {window}\n"
         f"- Stress index: {stress:.2f}/1.0\n"
         + emo_line
@@ -229,12 +252,21 @@ def _clean_response(raw: str) -> str | None:
 
 
 def _infer_trigger(ctx: dict) -> str:
-    """Choose the most relevant fallback template category from context."""
-    stress  = ctx.get("stress_index", 0.0) or 0.0
-    valence = ctx.get("valence")
-    arousal = ctx.get("arousal")
-    blinks  = ctx.get("blink_rate")
-    activity= ctx.get("avg_activity_pct")
+    """Choose the most relevant fallback template category from context.
+
+    Prefers the explicit trigger_reason supplied by the aggregator.
+    Falls back to signal-based inference when no reason is provided.
+    """
+    trigger_reason = ctx.get("trigger_reason")
+    if trigger_reason and trigger_reason in _TEMPLATES:
+        return trigger_reason
+
+    # Signal-based inference as last resort
+    stress   = ctx.get("stress_index", 0.0) or 0.0
+    valence  = ctx.get("valence")
+    arousal  = ctx.get("arousal")
+    blinks   = ctx.get("blink_rate")
+    activity = ctx.get("avg_activity_pct")
 
     if blinks is not None and blinks < 8:
         return "eye_strain"
