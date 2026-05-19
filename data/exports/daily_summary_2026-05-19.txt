@@ -5,32 +5,41 @@
 
   SESSION OVERVIEW
   ---------------------------------------------------------------
-  5-min windows         : 0 — no data found for this date
+  Monitoring time       : 55 min  (22:24 to 23:19)
+  5-min windows         : 11
+  Interventions         : 0
 
   STRESS SUMMARY
   ---------------------------------------------------------------
-  Stress index          : -- (no scored windows)
+  Average index         : 0.131  [ Low ]
+  Peak stress           : 22:39  |  Browser                   (index: 0.224)
+  Most relaxed          : 22:29  |  Browser                   (index: 0.064)
 
   PHYSIOLOGICAL
   ---------------------------------------------------------------
-  Average heart rate    : 75.5 BPM
-  Signal quality        : 0.39 / 1.00  [ Poor — results less reliable ]
-  RMSSD                 : -- (0 / 1 windows had sufficient signal)
+  Average heart rate    : 69.4 BPM
+  Signal quality        : 0.49 / 1.00  [ Fair ]
+  RMSSD                 : 82.8 ms  (4 / 11 HRV windows valid)
 
   EMOTIONAL STATE
   ---------------------------------------------------------------
-  Valence / Arousal     : -- (face data unavailable)
+  Valence               : +0.091  [ Neutral ]
+  Arousal               : +0.129  [ Moderate ]
+  Primary emotion       : Neutral  (low intensity)
+  Predominant state     : Balanced / attentive
 
   DESKTOP ACTIVITY
   ---------------------------------------------------------------
-  App data              : -- (no desktop readings for this date)
-  Tip                   : ensure the Flutter desktop app was running
+  Main activity         : Browser  (55% of session)
+  Activity level        : 74%
+  Window switches       : 119 total
+  Longest idle period   : 30 sec
 
   INTERVENTIONS  (0 triggered)
   ---------------------------------------------------------------
   No interventions triggered - good session!
 
  =================================================================
-  Generated 2026-05-19 00:07:35
+  Generated 2026-05-19 23:25:20
  =================================================================
 
