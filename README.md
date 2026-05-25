@@ -196,6 +196,54 @@ Press **Q** in the preview window to stop all modules cleanly.
 
 ---
 
+## Dashboard UI
+
+A PyQt6 graphical dashboard provides a real-time view of all system outputs without requiring the terminal to be open.
+
+### Prerequisites
+
+```powershell
+pip install PyQt6 pyqtgraph
+```
+
+### Launch options
+
+**Dashboard only** (monitoring backend must be started separately with `run_all.py`):
+
+```powershell
+python dashboard.py
+```
+
+**Dashboard + automatic backend** (starts `run_all.py --no-ui` as a background process):
+
+```powershell
+python dashboard.py --start-backend
+```
+
+When `--no-ui` is passed to `run_all.py`, the cv2 preview window is suppressed and the system runs headless — all sensor processing and DB writes continue normally. This is the intended mode when the dashboard is the primary interface.
+
+### Layout
+
+| Panel | Content |
+|-------|---------|
+| **Left (280 px)** | Stress gauge (arc-style, colour-coded), HR card, HRV (RMSSD) card, Valence–Arousal scatter, Desktop context card, system status dot |
+| **Centre (flex)** | 60-minute stress index trend (pyqtgraph), session stats bar (duration · avg stress · peak stress · interventions) |
+| **Right (260 px)** | Intervention history (last 15 entries), Export to Excel button, Settings button |
+
+### Settings
+
+Click **⚙ Settings** in the right panel to:
+
+- Toggle **dark / light mode** (persisted across sessions via `QSettings`)
+- Adjust the **refresh interval** (10–120 s, default 30 s)
+- Launch the **baseline calibration** session in a terminal window
+
+### First-launch splash
+
+If no personal baseline exists when the dashboard opens, a welcome dialog invites the user to run the 2-minute resting calibration before starting their first session.
+
+---
+
 ## Data Collection
 
 ### How the aggregation cycle works

@@ -102,14 +102,25 @@ def _probe_torch() -> str:
 # FLUTTER SUBPROCESS LAUNCHER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _launch_flutter() -> tuple[subprocess.Popen | None, str]:
-    """Launch the pre-built Flutter desktop app. Return (proc, status_string)."""
+def _launch_flutter(no_ui: bool = False) -> tuple[subprocess.Popen | None, str]:
+    """
+    Launch the pre-built Flutter desktop app. Return (proc, status_string).
+
+    When *no_ui* is True the process is started with CREATE_NO_WINDOW so the
+    Flutter window never appears — the dashboard reads the same desktop_readings
+    data directly from SQLite.
+    """
     if not os.path.exists(_FLUTTER_EXE):
         hint = "cd src/desktop && flutter build windows --release"
         return None, f"NOT FOUND  (build: {hint})"
     try:
-        proc = subprocess.Popen([_FLUTTER_EXE], cwd=_ROOT)
-        return proc, f"READY  PID {proc.pid}"
+        kwargs: dict = {"cwd": _ROOT}
+        if no_ui:
+            # Suppress the Flutter window; data is still written to the DB
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        proc = subprocess.Popen([_FLUTTER_EXE], **kwargs)
+        mode = " headless" if no_ui else ""
+        return proc, f"READY{mode}  PID {proc.pid}"
     except Exception as exc:
         return None, f"FAILED  {exc}"
 
@@ -209,6 +220,7 @@ def _run_loop(
     conn_physio,
     conn_face,
     stop_ev:     threading.Event,
+    no_ui:       bool = False,
 ) -> None:
     hr_t     = time.monotonic()
     hrv_t    = time.monotonic()
@@ -220,7 +232,10 @@ def _run_loop(
 
     _STRESS_REFRESH = 30.0   # seconds between stress-index DB queries
 
-    print("[Monitor] Running. Press Q in the window or Ctrl+C to stop.\n")
+    if no_ui:
+        print("[Monitor] Running headless (--no-ui). Ctrl+C to stop.\n")
+    else:
+        print("[Monitor] Running. Press Q in the window or Ctrl+C to stop.\n")
 
     with physio.model:   # starts rPPG inference thread
         while not stop_ev.is_set():
@@ -233,22 +248,24 @@ def _run_loop(
             # ── Feed rPPG model ───────────────────────────────────────────────
             physio.push_frame(frame)
 
-            # ── Face processing + mesh/EAR/pose annotations ───────────────────
+            # ── Face processing (always needed for landmark state) ────────────
             annotated = face.process_frame(frame)   # draws on a copy
 
-            # ── rPPG bounding box ─────────────────────────────────────────────
-            _draw_rppg_box(annotated, physio)
+            if no_ui:
+                # Headless mode: no window, no key polling, yield CPU briefly
+                time.sleep(0.001)
+            else:
+                # ── rPPG bounding box + status overlay ─────────────────────────
+                _draw_rppg_box(annotated, physio)
+                _draw_status_overlay(annotated, last_hr, last_stress)
 
-            # ── HR + stress index status line ─────────────────────────────────
-            _draw_status_overlay(annotated, last_hr, last_stress)
-
-            # ── Display ───────────────────────────────────────────────────────
-            cv2.imshow("Stress Monitor -- Q to quit", annotated)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 27:   # Q or Escape
-                print("[Monitor] Quit key pressed.")
-                stop_ev.set()
-                break
+                # ── Display ────────────────────────────────────────────────────
+                cv2.imshow("Stress Monitor -- Q to quit", annotated)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == 27:   # Q or Escape
+                    print("[Monitor] Quit key pressed.")
+                    stop_ev.set()
+                    break
 
             now = time.monotonic()
 
@@ -381,6 +398,16 @@ def _cleanup(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="Multimodal Stress Detection Monitor")
+    parser.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Run headless (no cv2 display window) — used when the PyQt6 dashboard "
+             "is the primary interface.",
+    )
+    args, _ = parser.parse_known_args()   # ignore unknown args (e.g. pytest flags)
+
     _print_banner()
     print("  Initialising modules...\n")
 
@@ -428,7 +455,7 @@ def main() -> None:
     agg_status = f"READY  {AGGREGATION_MINUTES}-min windows, background thread"
 
     # ── Flutter subprocess ────────────────────────────────────────────────────
-    flutter_proc, flutter_status = _launch_flutter()
+    flutter_proc, flutter_status = _launch_flutter(no_ui=args.no_ui)
 
     # ── Startup summary ───────────────────────────────────────────────────────
     _print_startup_summary([
@@ -454,7 +481,8 @@ def main() -> None:
     # ── Main processing loop ──────────────────────────────────────────────────
     # Runs on the main thread — required for cv2.imshow on Windows.
     try:
-        _run_loop(feed, physio, face, conn_physio, conn_face, stop_ev)
+        _run_loop(feed, physio, face, conn_physio, conn_face, stop_ev,
+                  no_ui=args.no_ui)
     finally:
         _cleanup(feed, aggregator, flutter_proc, conn_physio, conn_face)
 
