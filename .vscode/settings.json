@@ -1,6 +1,11 @@
 {
     "python.defaultInterpreterPath": "${workspaceFolder}/venv/Scripts/python.exe",
     "terminal.integrated.cwd": "${workspaceFolder}",
+    "python.terminal.activateEnvironment": true,
+    "terminal.integrated.env.windows": {
+        "VIRTUAL_ENV": "${workspaceFolder}/venv",
+        "PATH": "${workspaceFolder}/venv/Scripts;${env:PATH}"
+    },
     "editor.formatOnSave": true,
     "python.linting.enabled": true,
     "python.linting.flake8Enabled": true,

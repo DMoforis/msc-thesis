@@ -102,27 +102,103 @@ def _probe_torch() -> str:
 # FLUTTER SUBPROCESS LAUNCHER
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _hide_flutter_window(pid: int, timeout_s: float = 10.0) -> None:
+    """
+    Daemon thread: poll EnumWindows every 50 ms until the Flutter GUI window
+    becomes visible, then immediately call ShowWindow(SW_HIDE) to suppress it.
+
+    Why not CREATE_NO_WINDOW or STARTUPINFO?
+    -----------------------------------------
+    CREATE_NO_WINDOW only prevents *console* windows from being allocated.
+    Flutter desktop is a Win32 GUI application (WinMain subsystem) — it uses
+    CreateWindow (without WS_VISIBLE) and later calls ShowWindow(SW_SHOW)
+    explicitly from its SetNextFrameCallback, ignoring any process-creation
+    flags or STARTUPINFO.wShowWindow hints entirely.
+
+    The EnumWindows approach catches the ShowWindow(SW_SHOW) call within ≤50 ms
+    and immediately reverses it, keeping the window permanently hidden while
+    Flutter continues writing desktop context data to the database.
+    """
+    import ctypes
+    import ctypes.wintypes
+
+    user32 = ctypes.windll.user32
+
+    # Callback type for EnumWindows: (HWND, LPARAM) → BOOL
+    _WNDENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_bool,
+        ctypes.wintypes.HWND,
+        ctypes.wintypes.LPARAM,
+    )
+
+    found: list[int] = []
+
+    def _enum_cb(hwnd: int, _lparam: int) -> bool:
+        """Return False to stop enumeration once the target window is found."""
+        pid_buf = ctypes.wintypes.DWORD(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_buf))
+        if pid_buf.value == pid and user32.IsWindowVisible(hwnd):
+            found.append(hwnd)
+            return False   # stop — found what we need
+        return True        # continue
+
+    # Keep a persistent Python reference so the GC doesn't collect the callback
+    # while EnumWindows is executing.
+    cb = _WNDENUMPROC(_enum_cb)
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        time.sleep(0.05)   # poll every 50 ms
+        found.clear()
+        user32.EnumWindows(cb, 0)
+        if found:
+            hwnd = found[0]
+            user32.ShowWindow(hwnd, 0)   # 0 = SW_HIDE
+            print(f"[Flutter] Window suppressed (PID {pid}, hwnd {hwnd})")
+            return
+
+    print(
+        f"[Flutter] Warning: no visible window found for PID {pid} "
+        f"within {timeout_s:.0f} s — Flutter may not have started correctly."
+    )
+
+
 def _launch_flutter(no_ui: bool = False) -> tuple[subprocess.Popen | None, str]:
     """
     Launch the pre-built Flutter desktop app. Return (proc, status_string).
 
-    When *no_ui* is True the process is started with CREATE_NO_WINDOW so the
-    Flutter window never appears — the dashboard reads the same desktop_readings
-    data directly from SQLite.
+    When *no_ui* is True a daemon thread (_hide_flutter_window) suppresses
+    the Flutter GUI window as soon as it appears.  The process keeps running
+    and continues writing desktop context data to desktop_readings.
+
+    Note: CREATE_NO_WINDOW is intentionally NOT used here — see
+    _hide_flutter_window docstring for why it cannot suppress a GUI window.
     """
+    print(f"[Flutter] launching headless={no_ui}")
+
     if not os.path.exists(_FLUTTER_EXE):
-        hint = "cd src/desktop && flutter build windows --release"
-        return None, f"NOT FOUND  (build: {hint})"
+        msg = (
+            f"NOT FOUND  ({_FLUTTER_EXE})\n"
+            "  Build with: cd src/desktop && flutter build windows --release"
+        )
+        return None, msg
+
     try:
-        kwargs: dict = {"cwd": _ROOT}
-        if no_ui:
-            # Suppress the Flutter window; data is still written to the DB
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        proc = subprocess.Popen([_FLUTTER_EXE], **kwargs)
-        mode = " headless" if no_ui else ""
-        return proc, f"READY{mode}  PID {proc.pid}"
+        proc = subprocess.Popen([_FLUTTER_EXE], cwd=_ROOT)
     except Exception as exc:
         return None, f"FAILED  {exc}"
+
+    if no_ui:
+        t = threading.Thread(
+            target=_hide_flutter_window,
+            args=(proc.pid,),
+            daemon=True,
+            name="flutter-hide",
+        )
+        t.start()
+        return proc, f"READY headless  PID {proc.pid}"
+
+    return proc, f"READY  PID {proc.pid}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -71,8 +71,10 @@ def main() -> None:
             )
 
     # ── Show the dashboard window ─────────────────────────────────────────────
+    # standalone=False when --start-backend is used: run_all.py holds the
+    # primary camera, so the dashboard camera widget must NOT open it.
     from src.ui.dashboard import DashboardWindow
-    win = DashboardWindow()
+    win = DashboardWindow(standalone="--start-backend" not in sys.argv)
     win.show()
 
     exit_code = app.exec()

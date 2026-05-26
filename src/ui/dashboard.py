@@ -31,9 +31,9 @@ from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QSlider, QGroupBox, QFormLayout,
     QCheckBox, QMessageBox, QFrame, QSizePolicy, QProgressBar,
 )
-from PyQt6.QtCore import Qt, QTimer, QSettings, QSize, QRectF, QPointF, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QSettings, QSize, QRectF, QPointF, pyqtSignal, QThread
 from PyQt6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QFont, QPainterPath,
+    QPainter, QColor, QPen, QBrush, QFont, QPainterPath, QImage, QPixmap,
 )
 
 try:
@@ -43,8 +43,15 @@ try:
 except ImportError:
     _HAS_PG = False
 
+try:
+    import cv2 as _cv2
+    _HAS_CV2 = True
+except ImportError:
+    _cv2 = None       # type: ignore[assignment]
+    _HAS_CV2 = False
+
 from src.utils.db import open_db
-from src.utils.config import DB_PATH, STRESS_TRIGGER_THRESHOLD
+from src.utils.config import DB_PATH, STRESS_TRIGGER_THRESHOLD, CAMERA_INDEX
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -371,6 +378,19 @@ def _fetch_latest_desktop(conn) -> dict | None:
         return None
 
 
+def _fetch_latest_face(conn) -> dict | None:
+    """Return the most recent face_readings row for camera feed overlay."""
+    try:
+        row = conn.execute("""
+            SELECT timestamp, ear, blink_rate, face_pct, valence, arousal
+            FROM face_readings
+            ORDER BY id DESC LIMIT 1
+        """).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
 def _update_config_constant(name: str, value: int) -> bool:
     """
     Rewrite a single numeric constant in src/utils/config.py.
@@ -398,6 +418,303 @@ def _update_config_constant(name: str, value: int) -> bool:
     except Exception as exc:
         print(f"[Dashboard] Config update error for '{name}': {exc}")
         return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PYQTGRAPH HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+if _HAS_PG:
+    class TimeAxisItem(pg.AxisItem):
+        """
+        AxisItem subclass that formats Unix timestamps as HH:MM tick labels.
+
+        ROOT CAUSE OF THE x1e+09 BUG
+        ──────────────────────────────
+        pyqtgraph's AxisItem normally applies SI-prefix auto-scaling.  For an
+        axis range of ~1.7e9 (Unix epoch seconds) it chooses scale = 1e-9
+        (Giga prefix) and passes values ÷ 1e9 ≈ 1.7 to tickStrings.
+        datetime.fromtimestamp(1.7)  →  1970-01-01, not the real time.
+
+        Fix: call enableAutoSIPrefix(False) in __init__ so that scale is
+        always 1.0 and values passed to tickStrings are true Unix timestamps.
+        """
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.enableAutoSIPrefix(False)
+            self.setLabel(text="Time", units=None)
+
+        def tickStrings(self, values, scale, spacing):   # noqa: N802
+            result = []
+            for v in values:
+                try:
+                    result.append(datetime.fromtimestamp(float(v)).strftime("%H:%M"))
+                except Exception:
+                    result.append("")
+            return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CAMERA CAPTURE THREAD + FEED WIDGET
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _va_to_emotion(valence: float | None, arousal: float | None) -> str:
+    """Map Valence-Arousal coordinates to a human-readable quadrant label."""
+    if valence is None or arousal is None:
+        return "—"
+    if valence >= 0 and arousal >= 0.2:
+        return "Excited / Alert"
+    if valence >= 0 and arousal < 0.2:
+        return "Calm / Content"
+    if valence < 0 and arousal >= 0.2:
+        return "Tense / Stressed"
+    return "Sad / Fatigued"
+
+class CameraThread(QThread):
+    """
+    Background QThread that reads frames from an OpenCV VideoCapture and
+    emits them via *frame_ready* at ~15 FPS (66 ms interval).
+
+    Camera index selection (caller's responsibility):
+      • system active  → CAMERA_INDEX + 1  (secondary cam; don't steal main feed)
+      • system idle    → CAMERA_INDEX       (primary cam is free)
+    """
+    frame_ready = pyqtSignal(object)   # numpy BGR array
+
+    def __init__(self, camera_index: int, parent=None):
+        super().__init__(parent)
+        self._index   = camera_index
+        self._stop    = False
+        self._paused  = False
+
+    def run(self) -> None:
+        if not _HAS_CV2:
+            return
+        cap = _cv2.VideoCapture(self._index, _cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            # Silently fall back — feed widget shows "No Camera"
+            return
+        cap.set(_cv2.CAP_PROP_FRAME_WIDTH,  320)
+        cap.set(_cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        while not self._stop:
+            if self._paused:
+                self.msleep(100)
+                continue
+            ret, frame = cap.read()
+            if ret:
+                self.frame_ready.emit(frame)
+            self.msleep(66)   # ~15 FPS
+        cap.release()
+
+    def request_stop(self) -> None:
+        self._stop = True
+
+    def pause(self) -> None:
+        self._paused = True
+
+    def resume(self) -> None:
+        self._paused = False
+
+
+class CameraFeedWidget(QWidget):
+    """
+    Left-panel widget that shows either a live camera preview or a face-
+    metrics panel depending on *is_standalone*.
+
+    is_standalone=True  (--ui-only / no backend flag)
+        OpenCV capture on CAMERA_INDEX+1 (system active) or CAMERA_INDEX
+        (system idle).  BGR→RGB→QPixmap at 15 FPS.  Green border when face
+        was detected in the last 30 s.
+
+    is_standalone=False (--start-backend: run_all.py already holds cam)
+        No camera capture at all — avoids "[FATAL] Camera opened but no
+        frames arrived" conflict.  Instead renders a styled 240×180 metrics
+        pixmap via QPainter every time set_face_info() is called, showing:
+        face-detected status, EAR, blink rate, valence, arousal, emotion.
+    """
+
+    def __init__(self, is_standalone: bool = True, parent=None):
+        super().__init__(parent)
+        self._is_standalone = is_standalone
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(3)
+
+        hdr_text = "Live Camera" if is_standalone else "Face Metrics (from DB)"
+        hdr = QLabel(hdr_text)
+        hdr.setStyleSheet(f"color: {c('sub')}; font-size: 10px; font-weight: bold;")
+        lay.addWidget(hdr)
+
+        self._cam_lbl = QLabel("No Camera" if is_standalone else "Waiting for data…")
+        self._cam_lbl.setFixedSize(240, 180)
+        self._cam_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._cam_lbl.setStyleSheet(
+            f"background-color: {c('card')}; border: 2px solid {c('border')};"
+            f" border-radius: 4px; color: {c('sub')}; font-size: 10px;"
+        )
+        lay.addWidget(self._cam_lbl)
+
+        self._info_lbl = QLabel("EAR: — | Blinks: —")
+        self._info_lbl.setStyleSheet(f"color: {c('sub')}; font-size: 9px;")
+        self._info_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self._info_lbl)
+
+        self._thread:      CameraThread | None = None
+        self._face_recent: bool                = False
+
+    # ── Live-camera frame slot (standalone mode only) ─────────────────────────
+
+    def _on_frame(self, frame) -> None:
+        if frame is None or not _HAS_CV2:
+            return
+        rgb = _cv2.cvtColor(frame, _cv2.COLOR_BGR2RGB)
+        rgb = _cv2.resize(rgb, (240, 180))
+        h, w, ch = rgb.shape
+        img  = QImage(rgb.data, w, h, w * ch, QImage.Format.Format_RGB888)
+        pix  = QPixmap.fromImage(img)
+        self._cam_lbl.setPixmap(pix)
+        border = c("green") if self._face_recent else c("border")
+        self._cam_lbl.setStyleSheet(
+            f"background-color: {c('card')}; border: 2px solid {border};"
+            f" border-radius: 4px;"
+        )
+
+    # ── DB-metrics pixmap (non-standalone mode) ────────────────────────────────
+
+    def _render_metrics_pixmap(self, face_raw: dict | None) -> None:
+        """Draw a styled face-metrics panel using QPainter on a dark pixmap."""
+        pix = QPixmap(240, 180)
+        pix.fill(QColor(c("card")))
+
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if not self._face_recent or face_raw is None:
+            p.setPen(QPen(QColor(c("sub"))))
+            p.setFont(QFont("Segoe UI", 11))
+            p.drawText(QRectF(0, 0, 240, 180), Qt.AlignmentFlag.AlignCenter, "No face data")
+        else:
+            # ── Header ──
+            p.setPen(QPen(QColor(c("green"))))
+            p.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            p.drawText(QRectF(12, 10, 216, 22),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       "Face detected ✓")
+
+            # ── Divider ──
+            p.setPen(QPen(QColor(c("border")), 1))
+            p.drawLine(12, 36, 228, 36)
+
+            # ── Metric rows ──
+            ear    = face_raw.get("ear")
+            blinks = face_raw.get("blink_rate")
+            val    = face_raw.get("valence")
+            aro    = face_raw.get("arousal")
+            emotion = _va_to_emotion(val, aro)
+
+            rows = [
+                ("EAR",        f"{ear:.3f}"    if ear    is not None else "—"),
+                ("Blink rate", f"{blinks:.1f}/min" if blinks is not None else "—"),
+                ("Valence",    f"{val:+.2f}"   if val    is not None else "—"),
+                ("Arousal",    f"{aro:+.2f}"   if aro    is not None else "—"),
+                ("Emotion",    emotion),
+            ]
+
+            y = 44
+            for label, value in rows:
+                p.setPen(QPen(QColor(c("sub"))))
+                p.setFont(QFont("Segoe UI", 9))
+                p.drawText(QRectF(12, y, 108, 20),
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                           label)
+                p.setPen(QPen(QColor(c("text"))))
+                p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+                p.drawText(QRectF(120, y, 108, 20),
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                           value)
+                y += 22
+
+            # ── Timestamp footer ──
+            ts = face_raw.get("timestamp", "")
+            try:
+                ts_clean = str(ts).replace("T", " ")
+                dt_ts = datetime.strptime(ts_clean[:19], "%Y-%m-%d %H:%M:%S")
+                ts_str = dt_ts.strftime("%H:%M:%S")
+            except (ValueError, TypeError):
+                ts_str = ""
+            if ts_str:
+                p.setPen(QPen(QColor(c("sub"))))
+                p.setFont(QFont("Segoe UI", 8))
+                p.drawText(QRectF(12, 158, 216, 16),
+                           Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                           f"Updated {ts_str}")
+
+        p.end()
+        # Border colour reflects face detection state
+        border = c("green") if self._face_recent else c("border")
+        self._cam_lbl.setStyleSheet(
+            f"background-color: {c('card')}; border: 2px solid {border};"
+            f" border-radius: 4px;"
+        )
+        self._cam_lbl.setPixmap(pix)
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def set_face_info(self, face_raw: dict | None) -> None:
+        """Update overlay / metrics data; called from DashboardWindow._refresh."""
+        if face_raw is None:
+            self._face_recent = False
+        else:
+            ts = face_raw.get("timestamp", "")
+            try:
+                ts_clean = str(ts).replace("T", " ")
+                dt = datetime.strptime(ts_clean[:19], "%Y-%m-%d %H:%M:%S")
+                self._face_recent = (datetime.now() - dt).total_seconds() < 30
+            except (ValueError, TypeError):
+                self._face_recent = False
+
+        # ── Non-standalone: render metrics pixmap ──────────────────────────
+        if not self._is_standalone:
+            self._render_metrics_pixmap(face_raw)
+            return
+
+        # ── Standalone: update info label only (frame updated by _on_frame) ──
+        ear    = face_raw.get("ear")    if face_raw else None
+        blinks = face_raw.get("blink_rate") if face_raw else None
+        ear_s   = f"{ear:.3f}"     if ear    is not None else "—"
+        blink_s = f"{blinks:.1f}/m" if blinks is not None else "—"
+        self._info_lbl.setText(f"EAR: {ear_s} | Blinks: {blink_s}")
+
+    def start_capture(self, system_active: bool) -> None:
+        """Start (or restart) camera.  No-op in non-standalone mode."""
+        if not self._is_standalone:
+            return   # camera is held by run_all.py — do not compete
+        self._stop_thread()
+        cam_idx = (CAMERA_INDEX + 1) if system_active else CAMERA_INDEX
+        self._thread = CameraThread(cam_idx)
+        self._thread.frame_ready.connect(self._on_frame)
+        self._thread.start()
+
+    def stop_capture(self) -> None:
+        self._stop_thread()
+        self._cam_lbl.clear()
+        self._cam_lbl.setText("No Camera" if self._is_standalone else "Waiting for data…")
+
+    def pause_capture(self) -> None:
+        if self._thread:
+            self._thread.pause()
+
+    def resume_capture(self) -> None:
+        if self._thread:
+            self._thread.resume()
+
+    def _stop_thread(self) -> None:
+        if self._thread and self._thread.isRunning():
+            self._thread.request_stop()
+            self._thread.wait(2000)
+        self._thread = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -794,10 +1111,26 @@ class StatusDot(QWidget):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class LeftPanel(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, standalone: bool = True, parent=None):
         super().__init__(parent)
         self.setFixedWidth(280)
-        lay = QVBoxLayout(self)
+
+        # Outer layout: scroll area + pinned status row
+        outer_lay = QVBoxLayout(self)
+        outer_lay.setContentsMargins(0, 0, 0, 0)
+        outer_lay.setSpacing(0)
+
+        # ── Scrollable content ────────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+        )
+
+        content = QWidget()
+        lay = QVBoxLayout(content)
         lay.setContentsMargins(12, 12, 6, 12)
         lay.setSpacing(8)
 
@@ -831,10 +1164,23 @@ class LeftPanel(QWidget):
         self.desktop_card = DesktopCard()
         lay.addWidget(self.desktop_card)
 
+        # Live camera feed (requires cv2); in non-standalone mode shows DB metrics
+        if _HAS_CV2:
+            self.camera_widget: CameraFeedWidget | None = CameraFeedWidget(
+                is_standalone=standalone
+            )
+            lay.addWidget(self.camera_widget)
+        else:
+            self.camera_widget = None
+
         lay.addStretch()
 
-        # System status row
+        scroll.setWidget(content)
+        outer_lay.addWidget(scroll, stretch=1)
+
+        # ── Status row — pinned below scroll, always visible ──────────────
         status_row = QHBoxLayout()
+        status_row.setContentsMargins(12, 4, 6, 8)
         self.status_dot = StatusDot()
         status_row.addWidget(self.status_dot)
         self.status_lbl = QLabel("System inactive")
@@ -844,13 +1190,14 @@ class LeftPanel(QWidget):
         self._ts_lbl = QLabel("")
         self._ts_lbl.setStyleSheet(f"color: {c('sub')}; font-size: 9px;")
         status_row.addWidget(self._ts_lbl)
-        lay.addLayout(status_row)
+        outer_lay.addLayout(status_row)
 
     def refresh(
         self,
         data:        dict | None,
         active:      bool,
         desktop_raw: dict | None = None,
+        face_raw:    dict | None = None,
     ) -> None:
         if data:
             self.gauge.set_value(data.get("stress_index"))
@@ -873,6 +1220,10 @@ class LeftPanel(QWidget):
 
         # Desktop card uses the raw desktop_readings data for richer detail
         self.desktop_card.set_data(desktop_raw)
+
+        # Camera widget: pass latest face data for overlay
+        if self.camera_widget is not None:
+            self.camera_widget.set_face_info(face_raw)
 
         self.status_dot.set_active(active)
         lbl_text = "System active" if active else "System inactive"
@@ -902,7 +1253,9 @@ class CenterPanel(QWidget):
 
         # Trend plot
         if _HAS_PG:
-            self.plot = pg.PlotWidget()
+            self.plot = pg.PlotWidget(
+                axisItems={"bottom": TimeAxisItem(orientation="bottom")}
+            )
             self.plot.setBackground(c("panel"))
             self.plot.showGrid(x=True, y=True, alpha=0.2)
             self.plot.setYRange(0, 1.0)
@@ -930,11 +1283,31 @@ class CenterPanel(QWidget):
                 brush=pg.mkBrush(color=(*bytes.fromhex(c("accent")[1:]), 40)),
             )
             lay.addWidget(self.plot, stretch=1)
+
+            # No-data placeholder — shown when < 2 points in window, hidden otherwise
+            self._no_data_lbl = QLabel(
+                "No data in the last 60 minutes\n— monitoring in progress —"
+            )
+            self._no_data_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._no_data_lbl.setStyleSheet(
+                f"color: {c('sub')}; font-size: 11px;"
+            )
+            self._no_data_lbl.setMinimumHeight(220)
+            lay.addWidget(self._no_data_lbl, stretch=1)
+            self._no_data_lbl.hide()          # plot visible by default
+
         else:
             no_pg = QLabel("pyqtgraph not installed\npip install pyqtgraph")
             no_pg.setAlignment(Qt.AlignmentFlag.AlignCenter)
             no_pg.setStyleSheet(f"color: {c('sub')}; font-size: 12px;")
             lay.addWidget(no_pg, stretch=1)
+            self._no_data_lbl = None          # type: ignore[assignment]
+
+        # Date label (shows "Today, 26 May 2026") — updated on every refresh
+        self._date_lbl = QLabel("")
+        self._date_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._date_lbl.setStyleSheet(f"color: {c('sub')}; font-size: 9px;")
+        lay.addWidget(self._date_lbl)
 
         # Session stats bar
         stats_frame = QFrame()
@@ -986,21 +1359,40 @@ class CenterPanel(QWidget):
     def refresh_trend(self, times: list[float], values: list[float]) -> None:
         if not _HAS_PG:
             return
-        if not times:
+
+        now_ts = datetime.now().timestamp()
+
+        # Update date label on every refresh
+        today = datetime.now()
+        self._date_lbl.setText(
+            f"Today, {today.day} {today.strftime('%B %Y')}"
+        )
+
+        # Always pin the X axis to exactly the last 60 minutes
+        self.plot.setXRange(now_ts - 3600, now_ts, padding=0)
+
+        if len(times) < 2:
+            # Not enough data — show placeholder, clear curve
             self._curve.clear()
+            if self._no_data_lbl is not None:
+                self.plot.hide()
+                self._no_data_lbl.show()
             return
+
+        # Enough data — show plot, hide placeholder
+        if self._no_data_lbl is not None:
+            self._no_data_lbl.hide()
+            self.plot.show()
 
         x = np.array(times, dtype=float)
         y = np.array(values, dtype=float)
-        self._curve.setData(x, y)
 
-        # Human-readable time ticks
-        now_ts = datetime.now().timestamp()
-        ticks: list[tuple[float, str]] = []
-        for offset_min in range(0, 65, 10):
-            ts = now_ts - offset_min * 60
-            ticks.append((ts, datetime.fromtimestamp(ts).strftime("%H:%M")))
-        self.plot.getAxis("bottom").setTicks([ticks])
+        # Debug: verify we are passing true Unix timestamps
+        print(f"[Graph] X values sample: {x[:3].tolist() if len(x) >= 3 else x.tolist()}")
+
+        self._curve.setData(x, y)
+        # TimeAxisItem.enableAutoSIPrefix(False) ensures scale=1.0,
+        # so tickStrings receives true Unix timestamps → HH:MM labels
 
     def refresh_stats(self, stats: dict) -> None:
         dur = stats.get("duration", 0)
@@ -1320,10 +1712,11 @@ class DashboardWindow(QMainWindow):
     A QTimer drives non-blocking DB reads every *refresh_interval* seconds.
     """
 
-    def __init__(self, db_path: str = DB_PATH):
+    def __init__(self, db_path: str = DB_PATH, standalone: bool = True):
         super().__init__()
         self._db_path  = db_path
         self._settings = QSettings("StressMonitor", "Dashboard")
+        self._standalone = standalone
 
         # Apply saved theme before building any widgets
         theme_name = str(self._settings.value("theme", "dark"))
@@ -1345,7 +1738,7 @@ class DashboardWindow(QMainWindow):
         main_lay.setContentsMargins(0, 0, 0, 0)
         main_lay.setSpacing(0)
 
-        self._left   = LeftPanel()
+        self._left   = LeftPanel(standalone=standalone)
         self._center = CenterPanel(self._settings)
         self._right  = RightPanel()
 
@@ -1368,13 +1761,16 @@ class DashboardWindow(QMainWindow):
         # ── Database connection ───────────────────────────────────────────
         self._conn = _db_connect(self._db_path)
 
+        # Track last known active state to detect transitions for camera restart
+        self._last_active: bool | None = None
+
         # ── Refresh timer ─────────────────────────────────────────────────
         interval_s = int(self._settings.value("refresh_interval", 30))
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(interval_s * 1000)
 
-        # Initial data load
+        # Initial data load (starts camera as a side effect)
         self._refresh()
 
         # ── Splash screen on first launch (no baseline) ───────────────────
@@ -1393,14 +1789,23 @@ class DashboardWindow(QMainWindow):
             data          = _fetch_latest(self._conn)
             active        = _is_system_active(self._conn)
             desktop_raw   = _fetch_latest_desktop(self._conn)
+            face_raw      = _fetch_latest_face(self._conn)
             times, values = _fetch_trend(self._conn, minutes=60)
             interventions = _fetch_interventions(self._conn)
             stats         = _fetch_session_stats(self._conn)
 
-            self._left.refresh(data, active, desktop_raw=desktop_raw)
+            self._left.refresh(data, active, desktop_raw=desktop_raw, face_raw=face_raw)
             self._center.refresh_trend(times, values)
             self._center.refresh_stats(stats)
             self._right.refresh(interventions)
+
+            # ── Camera lifecycle ──────────────────────────────────────────
+            cam = self._left.camera_widget
+            if cam is not None:
+                if self._last_active is None or active != self._last_active:
+                    # Active state changed — restart camera on the right index
+                    cam.start_capture(system_active=active)
+                self._last_active = active
 
         except Exception as exc:
             print(f"[Dashboard] Refresh error: {exc}")
@@ -1443,8 +1848,24 @@ class DashboardWindow(QMainWindow):
 
     # ── Window lifecycle ──────────────────────────────────────────────────────
 
+    def changeEvent(self, event) -> None:  # noqa: N802
+        """Pause camera when window is minimised; resume when restored."""
+        from PyQt6.QtCore import QEvent
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            cam = self._left.camera_widget
+            if cam is not None:
+                if self.isMinimized():
+                    cam.pause_capture()
+                else:
+                    cam.resume_capture()
+
     def closeEvent(self, event) -> None:  # noqa: N802
         self._timer.stop()
+        # Stop camera thread before closing
+        cam = self._left.camera_widget
+        if cam is not None:
+            cam.stop_capture()
         if self._conn:
             try:
                 self._conn.close()
