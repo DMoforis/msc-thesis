@@ -25,6 +25,23 @@ Stress scoring is individually calibrated: a two-minute resting baseline session
 
 ---
 
+## Installation
+
+See **[INSTALL.md](INSTALL.md)** for complete step-by-step setup instructions covering Python environment, CUDA PyTorch, Ollama, Flutter build, and baseline calibration.
+
+**Quick start** — if Python 3.12, Ollama, and Flutter are already installed:
+
+```powershell
+python -m venv venv
+venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+ollama serve                                 # separate terminal, keep running
+python src\utils\baseline.py --calibrate    # first run only — 2-minute resting session
+python dashboard.py --start-backend
+```
+
+---
+
 ## System Architecture
 
 ```
@@ -105,24 +122,11 @@ Stress scoring is individually calibrated: a two-minute resting baseline session
 
 ## Prerequisites
 
-### Python environment
+> **First time?** See [INSTALL.md](INSTALL.md) for complete setup instructions.
 
-- Python 3.12
-- A CUDA-capable GPU is recommended (NVIDIA GTX 1060 or better); CPU fallback is supported for all models
+Required tools: Python 3.12, Flutter SDK 3.x, Visual Studio 2022 with **Desktop development with C++**, Ollama. An NVIDIA GPU is recommended for EmoNet-8 and Llama inference.
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-To install PyTorch with CUDA 12.1 support (RTX series GPUs):
-
-```powershell
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-```
-
-Key packages installed via `requirements.txt`:
+Key Python packages (installed via `requirements.txt`):
 
 | Package | Purpose |
 |---------|---------|
@@ -136,45 +140,6 @@ Key packages installed via `requirements.txt`:
 | `pandas`, `openpyxl` | Excel export |
 | `windows-toasts` | Native Windows 10/11 toast notifications (WinRT) |
 | `colorama` | Colour-coded terminal output for daily summaries |
-
-### Ollama — local LLM runtime
-
-The window-title classifier and recommendation engine require Ollama running locally. Start it in a separate terminal before launching the system:
-
-```powershell
-ollama serve
-```
-
-Pull the required model on first use (approximately 5 GB, downloaded once):
-
-```powershell
-ollama pull llama3.1:8b
-ollama run llama3.1:8b "Say hello in one sentence"   # verify
-```
-
-If Ollama is not running, the classifier falls back to keyword matching and the recommender uses template-based messages. The system continues to collect and score data normally.
-
-### Flutter — desktop context monitor
-
-The desktop context module is a pre-built Flutter native Windows application. Build it once before first use:
-
-- Flutter SDK 3.x (stable channel)
-- Visual Studio 2022 with the **Desktop development with C++** workload
-
-```powershell
-cd src/desktop
-flutter pub get
-flutter build windows --release
-cd ../..
-```
-
-The compiled executable is placed at:
-
-```
-src/desktop/build/windows/x64/runner/Release/desktop_monitor.exe
-```
-
-If the executable is not found, the system starts without desktop context data; physio and face modalities continue normally.
 
 ---
 
