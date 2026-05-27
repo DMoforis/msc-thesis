@@ -208,15 +208,21 @@ class Aggregator:
 
             stress_index   = self._fusion.score(physio_agg, face_agg, desktop_agg)
             trigger_reason = self._check_interventions(stress_index, face_agg, desktop_agg)
-            triggered      = trigger_reason is not None
 
+            # intervention_triggered=1 only when the notifier actually delivered.
+            # positive_flow may be suppressed by its own cooldown even if
+            # trigger_reason is not None, so we use the return value of
+            # _fire_intervention() rather than the presence of trigger_reason.
+            delivered = False
             if trigger_reason:
-                self._fire_intervention(trigger_reason, stress_index, face_agg, desktop_agg)
+                delivered = self._fire_intervention(
+                    trigger_reason, stress_index, face_agg, desktop_agg
+                )
 
             self._save_window(
                 conn, window_start, window_end,
                 physio_agg, face_agg, desktop_agg,
-                stress_index, triggered,
+                stress_index, delivered,
             )
             self._print_summary(
                 window_start, window_end,
@@ -399,8 +405,17 @@ class Aggregator:
         stress_index:   float,
         face_agg:       dict,
         desktop_agg:    dict,
-    ) -> None:
-        """Build context, generate a recommendation, and send a notification."""
+    ) -> bool:
+        """
+        Build context, generate a recommendation, and send a notification.
+
+        Returns
+        -------
+        True  — notification was delivered (notifier accepted and displayed it).
+        False — delivery was suppressed by the notifier's own cooldown, or an
+                exception prevented delivery.  intervention_triggered should
+                only be set to 1 in the DB when this returns True.
+        """
         try:
             session_min = int(
                 (datetime.now() - self._session_start).total_seconds() / 60
@@ -418,7 +433,7 @@ class Aggregator:
             }
             message = self._recommender.generate(context)
             title   = _TRIGGER_TITLES.get(trigger_reason, "Well-being Check")
-            self._notifier.send(
+            delivered = self._notifier.send(
                 title          = title,
                 message        = message,
                 trigger_reason = trigger_reason,
@@ -426,8 +441,10 @@ class Aggregator:
                 valence        = face_agg.get("avg_valence"),
                 arousal        = face_agg.get("avg_arousal"),
             )
+            return delivered
         except Exception as exc:
             print(f"[Aggregator] Intervention delivery error: {exc}")
+            return False
 
     # ── Persistence ───────────────────────────────────────────────────────────
 

@@ -55,6 +55,7 @@ from src.face.face_monitor import (
     _FRAME_TMP,
 )
 from src.fusion.aggregator import Aggregator
+from src.physio.hrv_processor import validate_hrv_metrics
 from src.utils.config import (
     CAMERA_INDEX, CAMERA_FPS,
     HR_WINDOW_SECONDS, HRV_WINDOW_SECONDS, FACE_WINDOW_SECONDS,
@@ -308,6 +309,11 @@ def _run_loop(
     last_hr:     float | None = None
     last_stress: float | None = None
 
+    # Collect 10-second HR readings for HRV cross-validation.
+    # Cleared after each HRV window so validate_hrv_metrics() compares
+    # the HRV-window HR against readings from the same 5-minute span.
+    hr_samples: list[float] = []
+
     _STRESS_REFRESH = 30.0   # seconds between stress-index DB queries
 
     if no_ui:
@@ -378,6 +384,7 @@ def _run_loop(
                             window_type   = "hr_10s",
                         )
                         last_hr = round(hr, 1)
+                        hr_samples.append(last_hr)
                         print(f"[HR]  {last_hr:5.1f} BPM   SQI: {sqi:.2f}")
                     else:
                         print(f"[rPPG] HR {hr:.0f} BPM out of valid range — discarded.")
@@ -392,18 +399,26 @@ def _run_loop(
                     hr  = float(result["hr"])
                     sqi = float(result.get("SQI") or 0.0)
                     hrv = result.get("hrv") or {}
-                    rmssd = hrv.get("rmssd")
-                    sdnn  = hrv.get("sdnn")
-                    lf_hf = hrv.get("LF/HF")
+                    rmssd_raw = hrv.get("rmssd")
+                    sdnn_raw  = hrv.get("sdnn")
+                    lf_hf     = hrv.get("LF/HF")
                     if 30.0 < hr < 220.0:
+                        # Validate RMSSD/SDNN against plausibility bounds and
+                        # cross-check HRV-window HR against the 10 s readings.
+                        # validate_hrv_metrics() returns None for out-of-range
+                        # values, keeping the DB free of physiologically
+                        # implausible rPPG artefacts.
+                        rmssd, sdnn = validate_hrv_metrics(
+                            rmssd_raw, sdnn_raw, hr, hr_samples
+                        )
                         _save_physio(
                             conn_physio,
-                            heart_rate    = round(hr, 1),
-                            rmssd         = round(rmssd, 1) if rmssd else None,
-                            lf_hf         = round(lf_hf, 2) if lf_hf else None,
-                            sdnn          = round(sdnn,  1) if sdnn  else None,
+                            heart_rate     = round(hr, 1),
+                            rmssd          = rmssd,   # already rounded (or None)
+                            lf_hf          = round(lf_hf, 2) if lf_hf else None,
+                            sdnn           = sdnn,    # already rounded (or None)
                             signal_quality = round(sqi, 2),
-                            window_type   = "hrv_5min",
+                            window_type    = "hrv_5min",
                         )
                         r_s = f"{rmssd:.1f}ms" if rmssd else "--"
                         s_s = f"{sdnn:.1f}ms"  if sdnn  else "--"
@@ -415,6 +430,8 @@ def _run_loop(
                         print(f"[rPPG] HRV window: HR {hr:.0f} BPM out of range.")
                 else:
                     print("[rPPG] HRV window: no signal available yet.")
+                # Reset HR samples for the next HRV window regardless of outcome.
+                hr_samples.clear()
                 hrv_t = now
 
             # ── Face reading every 30 s ───────────────────────────────────────
@@ -424,20 +441,22 @@ def _run_loop(
                 if reading:
                     _save_face(
                         conn_face,
-                        blink_rate = reading["blink_rate"],
-                        mean_ear   = reading["mean_ear"],
-                        pitch      = reading["pitch"],
-                        yaw        = reading["yaw"],
-                        roll       = reading["roll"],
-                        face_pct   = reading["face_pct"],
-                        valence    = reading["valence"],
-                        arousal    = reading["arousal"],
+                        blink_rate    = reading["blink_rate"],
+                        mean_ear      = reading["mean_ear"],
+                        pitch         = reading["pitch"],
+                        yaw           = reading["yaw"],
+                        roll          = reading["roll"],
+                        face_pct      = reading["face_pct"],
+                        valence       = reading["valence"],
+                        arousal       = reading["arousal"],
+                        emotion_label = reading.get("emotion_label"),
                     )
                     v = f"{reading['valence']:+.3f}" if reading["valence"] is not None else "--"
                     a = f"{reading['arousal']:+.3f}" if reading["arousal"] is not None else "--"
+                    emo = reading.get("emotion_label") or "--"
                     print(f"[Face] EAR={reading['mean_ear']:.3f}  "
                           f"Blinks={reading['blink_rate']:.1f}/min  "
-                          f"V={v}  A={a}")
+                          f"V={v}  A={a}  Emo={emo}")
                 else:
                     print("[Face] Too few frames with face detected in this window.")
                 face.reset_window()

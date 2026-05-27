@@ -11,10 +11,17 @@ __pycache__/
 data/stress_monitor_dev_archive*.db
 data/stress_monitor_test*.db
 
+# SQLite WAL/SHM auxiliary files — auto-generated, never committed
+data/*.db-wal
+data/*.db-shm
+
 # Flutter build artifacts
 src/desktop/build/
 src/desktop/.dart_tool/
 src/desktop/.idea/
+
+# Downloaded model weights and architecture files (~170 MB, not committed)
+data/models/
 
 # VS Code
 .vscode/
