@@ -566,11 +566,8 @@ class CameraFeedWidget(QWidget):
             f" border-radius: 4px; color: {c('sub')}; font-size: 10px;"
         )
         lay.addWidget(self._cam_lbl)
-
-        self._info_lbl = QLabel("EAR: — | Blinks: —")
-        self._info_lbl.setStyleSheet(f"color: {c('sub')}; font-size: 9px;")
-        self._info_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(self._info_lbl)
+        # Note: no EAR/blinks label — those values are overlaid on the frame
+        # itself by face_monitor.py, so a separate label is redundant.
 
         self._thread:      CameraThread | None = None
         self._face_recent: bool                = False
@@ -653,29 +650,22 @@ class CameraFeedWidget(QWidget):
 
     def set_face_info(self, face_raw: dict | None) -> None:
         """
-        Update face-recency flag (for border colour) and the info label.
+        Update the face-recency flag used for the border colour.
         Called every refresh cycle from DashboardWindow._refresh.
-        In non-standalone mode, frame display is handled by _poll_frame_file —
-        this method only keeps metadata in sync.
+        Frame display (non-standalone) is handled by the _poll_frame_file
+        QTimer; EAR/blink values are overlaid on the frame by face_monitor.py
+        and are not duplicated in a separate label.
         """
-        # Update face-recency for border colour (both modes)
         if face_raw is None:
             self._face_recent = False
-        else:
-            ts = face_raw.get("timestamp", "")
-            try:
-                ts_clean = str(ts).replace("T", " ")
-                dt = datetime.strptime(ts_clean[:19], "%Y-%m-%d %H:%M:%S")
-                self._face_recent = (datetime.now() - dt).total_seconds() < 30
-            except (ValueError, TypeError):
-                self._face_recent = False
-
-        # Update the EAR / blink footer label (both modes)
-        ear    = face_raw.get("ear")        if face_raw else None
-        blinks = face_raw.get("blink_rate") if face_raw else None
-        ear_s   = f"{ear:.3f}"      if ear    is not None else "—"
-        blink_s = f"{blinks:.1f}/m" if blinks is not None else "—"
-        self._info_lbl.setText(f"EAR: {ear_s} | Blinks: {blink_s}")
+            return
+        ts = face_raw.get("timestamp", "")
+        try:
+            ts_clean = str(ts).replace("T", " ")
+            dt = datetime.strptime(ts_clean[:19], "%Y-%m-%d %H:%M:%S")
+            self._face_recent = (datetime.now() - dt).total_seconds() < 30
+        except (ValueError, TypeError):
+            self._face_recent = False
 
     def start_capture(self, system_active: bool) -> None:
         """Start (or restart) live camera.  No-op in non-standalone mode."""

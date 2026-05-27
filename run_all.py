@@ -52,6 +52,7 @@ from src.face.face_monitor import (
     init_database as _init_face_db,
     save_reading  as _save_face,
     _FRAME_PATH,
+    _FRAME_TMP,
 )
 from src.fusion.aggregator import Aggregator
 from src.utils.config import (
@@ -337,10 +338,12 @@ def _run_loop(
             _draw_status_overlay(annotated, last_hr, last_stress)
 
             # ── Overwrite shared frame with the complete annotated version ────
+            # Atomic write: temp file → os.replace → final path.
             if face._frame_counter % 5 == 0:
                 try:
-                    cv2.imwrite(_FRAME_PATH, annotated,
+                    cv2.imwrite(_FRAME_TMP, annotated,
                                 [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    os.replace(_FRAME_TMP, _FRAME_PATH)
                 except Exception:
                     pass
 
@@ -479,14 +482,15 @@ def _cleanup(
         except Exception:
             pass
 
-    # Remove the shared frame file so the dashboard shows the placeholder
+    # Remove the shared frame files so the dashboard shows the placeholder
     # rather than a stale frozen frame after the backend stops.
-    try:
-        if os.path.exists(_FRAME_PATH):
-            os.remove(_FRAME_PATH)
-            print(f"[run_all] Removed shared frame file: {_FRAME_PATH}")
-    except Exception:
-        pass
+    for _f in (_FRAME_PATH, _FRAME_TMP):
+        try:
+            if os.path.exists(_f):
+                os.remove(_f)
+        except Exception:
+            pass
+    print(f"[run_all] Removed shared frame file(s)")
 
     print("[run_all] Clean shutdown complete.")
 

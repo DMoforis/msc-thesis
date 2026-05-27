@@ -42,8 +42,17 @@ if _ROOT not in sys.path:
 # Shared annotated-frame file — written here, polled by the dashboard widget.
 # Every 5th processed frame is saved at JPEG quality 70 to keep I/O light.
 # The file is deleted on clean shutdown (see run_all.py _cleanup).
+#
+# Atomic-write pattern: write to _FRAME_TMP first, then os.replace() to
+# _FRAME_PATH.  os.replace() is atomic on NTFS — the reader always sees
+# either the previous complete file or the new complete file, never a
+# partial write (which was causing "Corrupt JPEG data: premature end of
+# data segment" warnings in the dashboard).
 _FRAME_PATH: str = os.path.normpath(
     os.path.join(_ROOT, 'data', 'latest_frame.jpg')
+)
+_FRAME_TMP: str = os.path.normpath(
+    os.path.join(_ROOT, 'data', 'latest_frame.tmp.jpg')
 )
 
 from src.camera.shared_feed import SharedCameraFeed
@@ -357,7 +366,10 @@ class FaceModule:
         self._frame_counter += 1
         if self._frame_counter % 5 == 0:
             try:
-                cv2.imwrite(_FRAME_PATH, frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                # Write to temp file first, then rename atomically so the
+                # dashboard reader never sees a partial JPEG.
+                cv2.imwrite(_FRAME_TMP, frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                os.replace(_FRAME_TMP, _FRAME_PATH)
             except Exception:
                 pass   # non-fatal — dashboard will show placeholder
 
