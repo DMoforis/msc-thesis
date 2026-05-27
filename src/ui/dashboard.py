@@ -1244,7 +1244,7 @@ class CenterPanel(QWidget):
             )
             self.plot.setBackground(c("panel"))
             self.plot.showGrid(x=True, y=True, alpha=0.2)
-            self.plot.setYRange(0, 1.0)
+            self.plot.setYRange(0, 1.0, padding=0)
             self.plot.setMinimumHeight(220)
             self.plot.setLabel("left",   "Stress Index", color=c("sub"), size="10pt")
             self.plot.setLabel("bottom", "Time",         color=c("sub"), size="10pt")
@@ -1354,8 +1354,9 @@ class CenterPanel(QWidget):
             f"Today, {today.day} {today.strftime('%B %Y')}"
         )
 
-        # Always pin the X axis to exactly the last 60 minutes
+        # Pin both axes — pyqtgraph resets ranges after setData without this
         self.plot.setXRange(now_ts - 3600, now_ts, padding=0)
+        self.plot.setYRange(0, 1.0, padding=0)
 
         if len(times) < 2:
             # Not enough data — show placeholder, clear curve
