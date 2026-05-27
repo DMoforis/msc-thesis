@@ -39,6 +39,13 @@ _ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+# Shared annotated-frame file — written here, polled by the dashboard widget.
+# Every 5th processed frame is saved at JPEG quality 70 to keep I/O light.
+# The file is deleted on clean shutdown (see run_all.py _cleanup).
+_FRAME_PATH: str = os.path.normpath(
+    os.path.join(_ROOT, 'data', 'latest_frame.jpg')
+)
+
 from src.camera.shared_feed import SharedCameraFeed
 from src.face.valence_arousal import ValenceArousalPredictor
 from src.utils.emotion_labels import get_emotion_label
@@ -266,6 +273,9 @@ class FaceModule:
         self._va             = ValenceArousalPredictor()
         self._last_face_crop : np.ndarray | None = None
 
+        # Frame-save throttle: write to _FRAME_PATH every 5th call to process_frame
+        self._frame_counter: int = 0
+
     def reset_window(self) -> None:
         """Clear all accumulators for the next window."""
         self.blink_count       = 0
@@ -339,6 +349,17 @@ class FaceModule:
         ]):
             cv2.putText(frame, line, (10, 25 + i * 22),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 230, 120), 1)
+
+        # ── Shared preview frame (for dashboard) ─────────────────────────────
+        # Save every 5th frame so the dashboard can display the live feed
+        # without competing for the camera.  run_all.py overwrites this file
+        # with the more complete annotated frame (rPPG box + HR overlay).
+        self._frame_counter += 1
+        if self._frame_counter % 5 == 0:
+            try:
+                cv2.imwrite(_FRAME_PATH, frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            except Exception:
+                pass   # non-fatal — dashboard will show placeholder
 
         return frame
 

@@ -19,6 +19,9 @@ src/desktop/.idea/
 # VS Code
 .vscode/
 
+# Shared live frame file — written by face_monitor.py, read by dashboard
+data/latest_frame.jpg
+
 # OS
 .DS_Store
 Thumbs.db

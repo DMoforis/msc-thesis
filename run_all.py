@@ -51,6 +51,7 @@ from src.face.face_monitor import (
     FaceModule,
     init_database as _init_face_db,
     save_reading  as _save_face,
+    _FRAME_PATH,
 )
 from src.fusion.aggregator import Aggregator
 from src.utils.config import (
@@ -326,15 +327,27 @@ def _run_loop(
 
             # ── Face processing (always needed for landmark state) ────────────
             annotated = face.process_frame(frame)   # draws on a copy
+            # face.process_frame() saves every 5th frame to _FRAME_PATH with
+            # face-mesh + EAR + blink + pose overlays.  We overwrite it below
+            # with the more complete version (rPPG box + HR/stress) so the
+            # dashboard always sees all overlays regardless of UI mode.
+
+            # ── Always draw rPPG box + status (both UI and headless modes) ───
+            _draw_rppg_box(annotated, physio)
+            _draw_status_overlay(annotated, last_hr, last_stress)
+
+            # ── Overwrite shared frame with the complete annotated version ────
+            if face._frame_counter % 5 == 0:
+                try:
+                    cv2.imwrite(_FRAME_PATH, annotated,
+                                [cv2.IMWRITE_JPEG_QUALITY, 70])
+                except Exception:
+                    pass
 
             if no_ui:
                 # Headless mode: no window, no key polling, yield CPU briefly
                 time.sleep(0.001)
             else:
-                # ── rPPG bounding box + status overlay ─────────────────────────
-                _draw_rppg_box(annotated, physio)
-                _draw_status_overlay(annotated, last_hr, last_stress)
-
                 # ── Display ────────────────────────────────────────────────────
                 cv2.imshow("Stress Monitor -- Q to quit", annotated)
                 key = cv2.waitKey(1) & 0xFF
@@ -465,6 +478,15 @@ def _cleanup(
             conn.close()
         except Exception:
             pass
+
+    # Remove the shared frame file so the dashboard shows the placeholder
+    # rather than a stale frozen frame after the backend stops.
+    try:
+        if os.path.exists(_FRAME_PATH):
+            os.remove(_FRAME_PATH)
+            print(f"[run_all] Removed shared frame file: {_FRAME_PATH}")
+    except Exception:
+        pass
 
     print("[run_all] Clean shutdown complete.")
 

@@ -19,11 +19,18 @@ Calibration : subprocess cmd.exe window → src/utils/baseline.py --calibrate
 import os
 import sys
 import subprocess
+import time as _time
 from datetime import datetime, timedelta
 
 _ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+
+# Shared annotated-frame file written by face_monitor.py / run_all.py.
+# Polled by CameraFeedWidget in non-standalone (--start-backend) mode.
+_LATEST_FRAME_PATH: str = os.path.normpath(
+    os.path.join(_ROOT, "data", "latest_frame.jpg")
+)
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -519,20 +526,24 @@ class CameraThread(QThread):
 
 class CameraFeedWidget(QWidget):
     """
-    Left-panel widget that shows either a live camera preview or a face-
-    metrics panel depending on *is_standalone*.
+    Left-panel widget that shows a 240×180 camera feed in two modes:
 
-    is_standalone=True  (--ui-only / no backend flag)
-        OpenCV capture on CAMERA_INDEX+1 (system active) or CAMERA_INDEX
-        (system idle).  BGR→RGB→QPixmap at 15 FPS.  Green border when face
-        was detected in the last 30 s.
+    is_standalone=True  (launched without --start-backend)
+        OpenCV VideoCapture on CAMERA_INDEX+1 (system active) or CAMERA_INDEX
+        (system idle).  BGR→RGB→QPixmap at ~15 FPS via QThread.
+        Green border = face detected in the last 30 s.
 
-    is_standalone=False (--start-backend: run_all.py already holds cam)
-        No camera capture at all — avoids "[FATAL] Camera opened but no
-        frames arrived" conflict.  Instead renders a styled 240×180 metrics
-        pixmap via QPainter every time set_face_info() is called, showing:
-        face-detected status, EAR, blink rate, valence, arousal, emotion.
+    is_standalone=False (--start-backend: run_all.py already owns the camera)
+        No VideoCapture is opened — avoids the "[FATAL] Camera opened but no
+        frames arrived" conflict.  Instead a QTimer fires every 200 ms and
+        reads data/latest_frame.jpg, which run_all.py writes with the fully
+        annotated frame (face mesh + EAR + blinks + head pose + rPPG box +
+        HR/stress overlay).  File freshness < 5 s is required; otherwise the
+        widget shows a "Waiting for backend…" placeholder.
     """
+
+    # Max age of latest_frame.jpg before it's considered stale
+    _FRAME_MAX_AGE_S: float = 5.0
 
     def __init__(self, is_standalone: bool = True, parent=None):
         super().__init__(parent)
@@ -542,12 +553,12 @@ class CameraFeedWidget(QWidget):
         lay.setContentsMargins(0, 4, 0, 0)
         lay.setSpacing(3)
 
-        hdr_text = "Live Camera" if is_standalone else "Face Metrics (from DB)"
+        hdr_text = "Live Camera" if is_standalone else "Live Feed (shared)"
         hdr = QLabel(hdr_text)
         hdr.setStyleSheet(f"color: {c('sub')}; font-size: 10px; font-weight: bold;")
         lay.addWidget(hdr)
 
-        self._cam_lbl = QLabel("No Camera" if is_standalone else "Waiting for data…")
+        self._cam_lbl = QLabel("No Camera" if is_standalone else "Waiting for backend…")
         self._cam_lbl.setFixedSize(240, 180)
         self._cam_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._cam_lbl.setStyleSheet(
@@ -563,6 +574,14 @@ class CameraFeedWidget(QWidget):
 
         self._thread:      CameraThread | None = None
         self._face_recent: bool                = False
+
+        # Non-standalone: start QTimer that polls the shared frame file
+        if not is_standalone:
+            self._file_timer: QTimer | None = QTimer(self)
+            self._file_timer.timeout.connect(self._poll_frame_file)
+            self._file_timer.start(200)   # 5 FPS display rate
+        else:
+            self._file_timer = None
 
     # ── Live-camera frame slot (standalone mode only) ─────────────────────────
 
@@ -581,89 +600,65 @@ class CameraFeedWidget(QWidget):
             f" border-radius: 4px;"
         )
 
-    # ── DB-metrics pixmap (non-standalone mode) ────────────────────────────────
+    # ── Shared-file frame display (non-standalone mode) ────────────────────────
 
-    def _render_metrics_pixmap(self, face_raw: dict | None) -> None:
-        """Draw a styled face-metrics panel using QPainter on a dark pixmap."""
-        pix = QPixmap(240, 180)
-        pix.fill(QColor(c("card")))
+    def _poll_frame_file(self) -> None:
+        """
+        QTimer slot — fires every 200 ms in non-standalone mode.
 
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        Loads data/latest_frame.jpg if it exists and was written within the
+        last 5 seconds; scales it to 240×180 keeping aspect ratio; displays it
+        with a coloured border (green = face recent, grey = no face data).
+        Falls back to a text placeholder when the file is missing or stale.
+        """
+        try:
+            if not os.path.exists(_LATEST_FRAME_PATH):
+                self._show_placeholder("Waiting for backend…")
+                return
 
-        if not self._face_recent or face_raw is None:
-            p.setPen(QPen(QColor(c("sub"))))
-            p.setFont(QFont("Segoe UI", 11))
-            p.drawText(QRectF(0, 0, 240, 180), Qt.AlignmentFlag.AlignCenter, "No face data")
-        else:
-            # ── Header ──
-            p.setPen(QPen(QColor(c("green"))))
-            p.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-            p.drawText(QRectF(12, 10, 216, 22),
-                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                       "Face detected ✓")
+            mtime = os.path.getmtime(_LATEST_FRAME_PATH)
+            if _time.time() - mtime > self._FRAME_MAX_AGE_S:
+                self._show_placeholder("No face data")
+                return
 
-            # ── Divider ──
-            p.setPen(QPen(QColor(c("border")), 1))
-            p.drawLine(12, 36, 228, 36)
+            pix = QPixmap(_LATEST_FRAME_PATH)
+            if pix.isNull():
+                return   # file partially written — skip this tick
 
-            # ── Metric rows ──
-            ear    = face_raw.get("ear")
-            blinks = face_raw.get("blink_rate")
-            val    = face_raw.get("valence")
-            aro    = face_raw.get("arousal")
-            emotion = _va_to_emotion(val, aro)
+            scaled = pix.scaled(
+                240, 180,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            border = c("green") if self._face_recent else c("border")
+            self._cam_lbl.setStyleSheet(
+                f"background-color: {c('card')}; border: 2px solid {border};"
+                f" border-radius: 4px;"
+            )
+            self._cam_lbl.setPixmap(scaled)
 
-            rows = [
-                ("EAR",        f"{ear:.3f}"    if ear    is not None else "—"),
-                ("Blink rate", f"{blinks:.1f}/min" if blinks is not None else "—"),
-                ("Valence",    f"{val:+.2f}"   if val    is not None else "—"),
-                ("Arousal",    f"{aro:+.2f}"   if aro    is not None else "—"),
-                ("Emotion",    emotion),
-            ]
+        except Exception:
+            pass   # I/O race during write — next tick will recover
 
-            y = 44
-            for label, value in rows:
-                p.setPen(QPen(QColor(c("sub"))))
-                p.setFont(QFont("Segoe UI", 9))
-                p.drawText(QRectF(12, y, 108, 20),
-                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                           label)
-                p.setPen(QPen(QColor(c("text"))))
-                p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-                p.drawText(QRectF(120, y, 108, 20),
-                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                           value)
-                y += 22
-
-            # ── Timestamp footer ──
-            ts = face_raw.get("timestamp", "")
-            try:
-                ts_clean = str(ts).replace("T", " ")
-                dt_ts = datetime.strptime(ts_clean[:19], "%Y-%m-%d %H:%M:%S")
-                ts_str = dt_ts.strftime("%H:%M:%S")
-            except (ValueError, TypeError):
-                ts_str = ""
-            if ts_str:
-                p.setPen(QPen(QColor(c("sub"))))
-                p.setFont(QFont("Segoe UI", 8))
-                p.drawText(QRectF(12, 158, 216, 16),
-                           Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                           f"Updated {ts_str}")
-
-        p.end()
-        # Border colour reflects face detection state
-        border = c("green") if self._face_recent else c("border")
+    def _show_placeholder(self, msg: str) -> None:
+        """Show a text placeholder on the dark card background."""
+        self._cam_lbl.setPixmap(QPixmap())
+        self._cam_lbl.setText(msg)
         self._cam_lbl.setStyleSheet(
-            f"background-color: {c('card')}; border: 2px solid {border};"
-            f" border-radius: 4px;"
+            f"background-color: {c('card')}; border: 2px solid {c('border')};"
+            f" border-radius: 4px; color: {c('sub')}; font-size: 10px;"
         )
-        self._cam_lbl.setPixmap(pix)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def set_face_info(self, face_raw: dict | None) -> None:
-        """Update overlay / metrics data; called from DashboardWindow._refresh."""
+        """
+        Update face-recency flag (for border colour) and the info label.
+        Called every refresh cycle from DashboardWindow._refresh.
+        In non-standalone mode, frame display is handled by _poll_frame_file —
+        this method only keeps metadata in sync.
+        """
+        # Update face-recency for border colour (both modes)
         if face_raw is None:
             self._face_recent = False
         else:
@@ -675,20 +670,15 @@ class CameraFeedWidget(QWidget):
             except (ValueError, TypeError):
                 self._face_recent = False
 
-        # ── Non-standalone: render metrics pixmap ──────────────────────────
-        if not self._is_standalone:
-            self._render_metrics_pixmap(face_raw)
-            return
-
-        # ── Standalone: update info label only (frame updated by _on_frame) ──
-        ear    = face_raw.get("ear")    if face_raw else None
+        # Update the EAR / blink footer label (both modes)
+        ear    = face_raw.get("ear")        if face_raw else None
         blinks = face_raw.get("blink_rate") if face_raw else None
-        ear_s   = f"{ear:.3f}"     if ear    is not None else "—"
+        ear_s   = f"{ear:.3f}"      if ear    is not None else "—"
         blink_s = f"{blinks:.1f}/m" if blinks is not None else "—"
         self._info_lbl.setText(f"EAR: {ear_s} | Blinks: {blink_s}")
 
     def start_capture(self, system_active: bool) -> None:
-        """Start (or restart) camera.  No-op in non-standalone mode."""
+        """Start (or restart) live camera.  No-op in non-standalone mode."""
         if not self._is_standalone:
             return   # camera is held by run_all.py — do not compete
         self._stop_thread()
@@ -698,15 +688,21 @@ class CameraFeedWidget(QWidget):
         self._thread.start()
 
     def stop_capture(self) -> None:
+        if self._file_timer is not None:
+            self._file_timer.stop()
         self._stop_thread()
         self._cam_lbl.clear()
         self._cam_lbl.setText("No Camera" if self._is_standalone else "Waiting for data…")
 
     def pause_capture(self) -> None:
+        if self._file_timer is not None:
+            self._file_timer.stop()
         if self._thread:
             self._thread.pause()
 
     def resume_capture(self) -> None:
+        if self._file_timer is not None:
+            self._file_timer.start(200)
         if self._thread:
             self._thread.resume()
 
