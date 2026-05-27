@@ -1374,9 +1374,6 @@ class CenterPanel(QWidget):
         x = np.array(times, dtype=float)
         y = np.array(values, dtype=float)
 
-        # Debug: verify we are passing true Unix timestamps
-        print(f"[Graph] X values sample: {x[:3].tolist() if len(x) >= 3 else x.tolist()}")
-
         self._curve.setData(x, y)
         # TimeAxisItem.enableAutoSIPrefix(False) ensures scale=1.0,
         # so tickStrings receives true Unix timestamps → HH:MM labels

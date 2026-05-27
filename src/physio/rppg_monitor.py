@@ -249,7 +249,7 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                         hr  = float(result["hr"])
                         sqi = float(result.get("SQI") or 0.0)
 
-                        if 30.0 < hr < 220.0:
+                        if 40.0 <= hr <= 200.0:
                             save_reading(conn,
                                          heart_rate    = round(hr, 1),
                                          rmssd         = None,
@@ -261,8 +261,7 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                             print(f"[HR]  {round(hr, 1):5.1f} BPM  "
                                   f"SQI: {sqi:.2f}")
                         else:
-                            print(f"[rPPG] HR {hr:.0f} BPM outside valid range "
-                                  f"— discarded.")
+                            print(f"[HR] rejected — implausible value: {hr:.1f} BPM")
                     else:
                         print("[rPPG] Not enough signal yet "
                               f"(need {HR_WINDOW_SECONDS}s of face data).")
@@ -295,7 +294,7 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                             avg_10s_hr = hr
                             hr_delta   = 0.0
 
-                        if 30.0 < hr < 220.0:
+                        if 40.0 <= hr <= 200.0:
                             save_reading(
                                 conn,
                                 heart_rate    = round(hr, 1),
@@ -327,8 +326,7 @@ def run_monitor(feed: SharedCameraFeed) -> None:
                                 print(f"  *** HR inconsistency ({hr_delta:.1f} BPM) - HRV discarded")
                             print(f"{'-'*52}\n")
                         else:
-                            print(f"[rPPG] HRV window HR {hr:.0f} BPM "
-                                  f"outside valid range — discarded.")
+                            print(f"[HR] rejected — implausible value: {hr:.1f} BPM")
                     else:
                         print("[rPPG] HRV window: no signal available yet.")
 
