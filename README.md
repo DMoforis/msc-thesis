@@ -21,7 +21,7 @@ Stress scoring is individually calibrated: a two-minute resting baseline session
 |----------|-------------|-------------|
 | Physiological | Webcam (rPPG) | Heart rate (BPM), RMSSD, LF/HF ratio |
 | Facial analysis | Webcam (MediaPipe + EmoNet-8) | Blink rate, EAR, head pose, valence, arousal, emotion label |
-| Desktop context | Windows OS (Flutter + win32) | Active window, LLM-classified category, idle time, activity %, window switches |
+| Desktop context | Windows OS (Flutter + win32) | Active window, keyword-classified category (LLM available for offline analysis), idle time, activity %, window switches |
 
 ---
 
@@ -92,7 +92,7 @@ Stress scoring is individually calibrated: a two-minute resting baseline session
 | Face monitor | `src/face/face_monitor.py` | MediaPipe 468-landmark mesh → EAR, blink rate, head pose every 30 s; writes annotated preview frame to shared JPEG for dashboard |
 | Valence-Arousal | `src/face/valence_arousal.py` | EmoNet-8 (Toisoul et al., 2021) → continuous valence and arousal from face crop |
 | Emotion labels | `src/utils/emotion_labels.py` | Maps VA coordinates to Russell (1980) circumplex quadrant labels |
-| Desktop monitor | `src/desktop/lib/main.dart` | Flutter + win32 → active window title, LLM-classified category, idle time, activity %, window switches |
+| Desktop monitor | `src/desktop/lib/main.dart` | Flutter + win32 → active window title, keyword-classified category (LLM available for offline analysis), idle time, activity %, window switches |
 | LLM classifier | `src/llm/classifier.py` | Llama 3.1 8B classifies window titles into nine activity categories; LRU-cached; keyword fallback |
 | LLM recommender | `src/llm/recommender.py` | Generates contextual natural-language recommendations; per-trigger guidance injected into prompt; template fallback |
 | Aggregator | `src/fusion/aggregator.py` | Background thread; merges raw readings into 5-min summary windows; evaluates all six intervention trigger conditions |
@@ -397,7 +397,7 @@ CREATE TABLE desktop_readings (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp        TEXT NOT NULL,
     active_window    TEXT,
-    app_category     TEXT,   -- LLM-classified activity type
+    app_category     TEXT,   -- keyword-classified activity type (LLM available offline)
     idle_seconds     REAL,
     activity_pct     REAL,   -- % of window with keyboard/mouse input
     window_switches  INTEGER
@@ -574,7 +574,7 @@ MediaPipe Face Mesh detecting 468 landmarks per frame. Extracts Eye Aspect Ratio
 
 ### PoC #3 — Desktop Context Monitor
 
-Flutter native Windows application monitoring active window, LLM-classified application category, idle time, and activity percentage.
+Flutter native Windows application monitoring active window, keyword-classified application category (LLM available for offline analysis), idle time, and activity percentage.
 
 ![PoC #3 Desktop App](docs/screenshots/PoC%233.1_Desktop_ActivityMonitor.png)
 

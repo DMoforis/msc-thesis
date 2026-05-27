@@ -65,6 +65,11 @@ OLLAMA_TIMEOUT = 2   # seconds; fall back to keyword matching if exceeded
 # ── Baseline calibration ─────────────────────────────────────────────────────
 BASELINE_DURATION_SECONDS = 120   # 2-minute resting calibration session
 
+# ── Diagnostics ───────────────────────────────────────────────────────────────
+# Set True to print per-window aggregation detail (desktop sample rows, row
+# counts) to the terminal.  Keep False during pilot sessions to reduce noise.
+AGGREGATOR_VERBOSE = False
+
 # ── Face landmark detection ───────────────────────────────────────────────────
 EAR_THRESHOLD    = 0.21   # below this → eye considered closed (Soukupova & Cech 2016)
 BLINK_MIN_FRAMES = 2      # minimum consecutive closed frames to count as a blink

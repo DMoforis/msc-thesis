@@ -145,7 +145,7 @@ class WindowClassifier:
     """
     Classifies an active window title into one of nine activity categories.
 
-    Primary: Ollama (Llama 3.2 8B) with a 2-second timeout.
+    Primary: Ollama (Llama 3.1 8B) with a 2-second timeout.
     Fallback: rule-based keyword matching.
     Cache:    LRU dict — same title always returns the same category.
 

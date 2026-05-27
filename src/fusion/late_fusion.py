@@ -43,6 +43,26 @@ _MAX_HR_DELTA = 30.0
 # Desktop score calibration (not personal — attention fragmentation constant)
 _HIGH_WINDOW_SWITCHES = 20  # switches per 5-min window → score 1.0
 
+# Flutter desktop monitor category → cognitive load weight.
+# Keys must match the exact strings written by src/desktop/lib/main.dart.
+# Higher weight = more cognitively demanding / stress-relevant context.
+#
+# Rationale:
+#   IDE/Terminal  — sustained, demanding focus work; strong load signal
+#   Communication — meetings and email impose social-pressure stress
+#   Document      — sustained writing/reading; moderate cognitive demand
+#   Browser       — ambiguous (research or distraction); moderate weight
+#   Media         — entertainment context; user is likely on a break
+#   Other         — unrecognised label; conservative neutral-low default
+_CATEGORY_WEIGHTS: dict[str, float] = {
+    "IDE/Terminal":  0.7,
+    "Communication": 0.6,
+    "Document":      0.5,
+    "Browser":       0.3,
+    "Media":         0.1,
+    "Other":         0.2,
+}
+
 
 class LateFusion:
     """
@@ -184,26 +204,49 @@ class LateFusion:
     def _desktop_score(self, desktop: dict) -> float | None:
         """
         Desktop stress score in [0, 1].
-        Combines inactivity, fragmented attention (window switches), and app
-        category (distracting apps during work hours).
+
+        Combines three independent signals (all normalised to [0, 1]):
+
+        1. App-category cognitive load — maps the Flutter desktop monitor
+           taxonomy (IDE/Terminal, Browser, Document, Media, Communication,
+           Other) to a stress-relevant weight via _CATEGORY_WEIGHTS.
+           High-load categories increase the score; Media/breaks reduce it.
+
+        2. Inactivity — the complement of keyboard/mouse activity percentage.
+           Low activity while the system is running indicates disengagement
+           or task avoidance, which correlates with stress.
+
+        3. Attention fragmentation — total window switches in the 5-minute
+           window normalised against _HIGH_WINDOW_SWITCHES.  Frequent
+           context-switching reflects difficulty sustaining focus.
+
+        Any component whose data is absent (None) is excluded from the
+        average, preserving the graceful-degradation guarantee.  If all
+        three are absent, returns None so the modality weight drops to zero
+        in the fusion layer.
         """
         activity_pct = desktop.get("avg_activity_pct")
         win_switches = desktop.get("total_window_switches")
-        category     = desktop.get("dominant_category") or ""
+        category     = desktop.get("dominant_category")
 
         subscores: list[float] = []
 
+        # 1. Category cognitive load — Flutter taxonomy via _CATEGORY_WEIGHTS.
+        #    Unrecognised labels (legacy/test data) fall back to "Other" weight.
+        if category is not None:
+            cat_score = _CATEGORY_WEIGHTS.get(
+                category.strip(), _CATEGORY_WEIGHTS["Other"]
+            )
+            subscores.append(cat_score)
+
+        # 2. Inactivity: low activity → disengaged or avoiding work
         if activity_pct is not None:
-            # Low activity → user is disengaged or avoiding work → stress signal
             subscores.append(max(0.0, 1.0 - activity_pct / 100.0))
 
+        # 3. Attention fragmentation: frequent window switching
+        #    _HIGH_WINDOW_SWITCHES total per 5-min window ≈ 4 switches/min → 1.0
         if win_switches is not None:
-            # Frequent window switching → fragmented attention → stress signal
             subscores.append(min(1.0, win_switches / _HIGH_WINDOW_SWITCHES))
-
-        if category in ("Social Media", "Entertainment", "Communication"):
-            # Non-work context during a session indicates potential stress avoidance
-            subscores.append(0.4)
 
         return sum(subscores) / len(subscores) if subscores else None
 
@@ -215,21 +258,26 @@ if __name__ == "__main__":
 
     cases = [
         # (description, physio, face, desktop, expected_ballpark)
-        ("All zeros — no stress",
+        ("Relaxed — no stress indicators",
          {"avg_hr": 70.0, "avg_rmssd": 40.0},
          {"avg_valence": 0.5, "avg_arousal": 0.1, "avg_ear": 0.28},
-         {"avg_activity_pct": 80.0, "total_window_switches": 3, "dominant_category": "Academic Work"},
+         {"avg_activity_pct": 80.0, "total_window_switches": 3, "dominant_category": "Browser"},
          "<0.25"),
-        ("Elevated HR, low RMSSD, negative valence",
+        ("Elevated HR, low RMSSD, negative valence, fragmented attention",
          {"avg_hr": 95.0, "avg_rmssd": 15.0},
          {"avg_valence": -0.6, "avg_arousal": 0.7, "avg_ear": 0.19},
-         {"avg_activity_pct": 30.0, "total_window_switches": 18, "dominant_category": "Social Media"},
+         {"avg_activity_pct": 30.0, "total_window_switches": 18, "dominant_category": "IDE/Terminal"},
          ">0.65"),
-        ("Missing physio — face + desktop only",
+        ("Missing physio — face + desktop only (Document, medium activity)",
          {"avg_hr": None, "avg_rmssd": None},
          {"avg_valence": -0.3, "avg_arousal": 0.4, "avg_ear": 0.25},
-         {"avg_activity_pct": 60.0, "total_window_switches": 8, "dominant_category": "Academic Work"},
+         {"avg_activity_pct": 60.0, "total_window_switches": 8, "dominant_category": "Document"},
          "0.2–0.5"),
+        ("Media break — low cognitive load context",
+         {"avg_hr": 68.0, "avg_rmssd": 45.0},
+         {"avg_valence": 0.3, "avg_arousal": 0.1, "avg_ear": 0.29},
+         {"avg_activity_pct": 75.0, "total_window_switches": 2, "dominant_category": "Media"},
+         "<0.15"),
         ("All missing",
          {"avg_hr": None, "avg_rmssd": None},
          {"avg_valence": None, "avg_arousal": None, "avg_ear": None},

@@ -257,10 +257,31 @@ Face score:
 - EAR below threshold → increases score
 - Combined: weighted mean
 
-Desktop score:
-- Low activity_pct → increases score
-- High window_switches → increases score
-- App category weight: Communication/Social Media during work hours → increases score
+Desktop score — three components averaged (missing data excluded):
+
+1. **App category cognitive load** (Flutter taxonomy mapping):
+
+   | Flutter category | Weight | Rationale |
+   |-----------------|--------|-----------|
+   | `IDE/Terminal`  | 0.7    | Intense focus work — high cognitive load |
+   | `Communication` | 0.6    | Meetings / email — sustained social pressure |
+   | `Document`      | 0.5    | Sustained writing effort — moderate load |
+   | `Browser`       | 0.3    | Research or distraction — ambiguous context |
+   | `Media`         | 0.1    | Entertainment — user is likely resting |
+   | `Other`         | 0.2    | Unrecognised label — conservative default |
+
+   > **Architecture note:** `app_category` is written by the Flutter subprocess
+   > using keyword-based Dart rules.  The Python `src/llm/classifier.py` module
+   > is available for offline re-classification only (see §Known Limitations).
+   > Unrecognised category strings fall back to the `Other` weight.
+
+2. **Inactivity:** `1.0 − activity_pct / 100.0`
+   Low keyboard/mouse activity while the session is running indicates
+   disengagement or task avoidance — an indirect stress signal.
+
+3. **Attention fragmentation:** `min(1.0, total_window_switches / 20)`
+   20 window switches in a 5-minute window (≈ 4/min) maps to score 1.0.
+   Frequent context-switching reflects difficulty sustaining focus.
 
 ---
 

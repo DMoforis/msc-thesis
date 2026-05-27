@@ -92,7 +92,7 @@ Weights start equal (0.33 each), later tuned via pilot study data.
 Output: `stress_index` (0-1) + `valence` (-1 to 1) + `arousal` (-1 to 1)
 
 ### Layer 5: Intervention engine
-Local Llama 3.2 8B via Ollama generates natural language recommendations.
+Local Llama 3.1 8B via Ollama generates natural language recommendations.
 Triggered when stress_index > threshold OR valence < -0.3 OR arousal deviates from baseline.
 Delivered as Windows desktop notifications.
 Examples:

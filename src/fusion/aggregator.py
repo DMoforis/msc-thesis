@@ -64,6 +64,7 @@ from src.utils.config import (
     FLOW_VALENCE_FLOOR,
     MIN_MINUTES_BETWEEN_FLOW_NOTIFS,
     MAX_FLOW_NOTIFS_PER_SESSION,
+    AGGREGATOR_VERBOSE,
 )
 from src.utils.db import (
     open_db,
@@ -192,15 +193,18 @@ class Aggregator:
             face_rows    = fetch_face_window(conn,    window_start, window_end)
             desktop_rows = fetch_desktop_window(conn, window_start, window_end)
 
-            # Diagnostic: confirm desktop rows are being picked up
-            print(f"[Aggregator] window {window_start:%H:%M}-{window_end:%H:%M} | "
-                  f"physio={len(physio_rows)} face={len(face_rows)} desktop={len(desktop_rows)}")
-            if desktop_rows:
-                r0 = desktop_rows[0]
-                print(f"[Aggregator]   desktop sample: ts={r0['timestamp']} "
-                      f"cat={r0['app_category']} act={r0['activity_pct']:.0f}%")
-            else:
-                print("[Aggregator]   desktop: no rows in window — desktop columns will be NULL")
+            # Per-window diagnostic output — gated by AGGREGATOR_VERBOSE in config.py.
+            # Set AGGREGATOR_VERBOSE = True when debugging desktop data ingestion;
+            # leave False during pilot sessions to keep the terminal clean.
+            if AGGREGATOR_VERBOSE:
+                print(f"[Aggregator] window {window_start:%H:%M}-{window_end:%H:%M} | "
+                      f"physio={len(physio_rows)} face={len(face_rows)} desktop={len(desktop_rows)}")
+                if desktop_rows:
+                    r0 = desktop_rows[0]
+                    print(f"[Aggregator]   desktop sample: ts={r0['timestamp']} "
+                          f"cat={r0['app_category']} act={r0['activity_pct']:.0f}%")
+                else:
+                    print("[Aggregator]   desktop: no rows in window — desktop columns will be NULL")
 
             physio_agg  = self._aggregate_physio(physio_rows)
             face_agg    = self._aggregate_face(face_rows)

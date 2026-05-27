@@ -92,7 +92,7 @@ def test_baseline_personalisation():
     inputs = (
         {"avg_hr": 80.0, "avg_rmssd": 30.0},
         {"avg_valence": 0.0, "avg_arousal": 0.2, "avg_ear": None},
-        {"avg_activity_pct": 50.0, "total_window_switches": 5, "dominant_category": "Academic Work"},
+        {"avg_activity_pct": 50.0, "total_window_switches": 5, "dominant_category": "Browser"},
     )
 
     fusion_pop  = _make_fusion(_POP)           # resting HR = 70 → 80 is +10 above baseline
@@ -102,3 +102,48 @@ def test_baseline_personalisation():
     score_high = fusion_high.score(*inputs)
 
     assert score_pop > score_high
+
+
+def test_desktop_category_flutter_taxonomy(fusion):
+    """IDE/Terminal must produce a higher overall stress_index than Media for
+    identical physio/face inputs, because IDE work carries a higher cognitive
+    load weight in the Flutter taxonomy (0.7 vs 0.1).
+
+    Physio and face are set to None so the comparison is driven entirely by
+    the desktop signal, making the test independent of baseline values.
+    """
+    no_physio = {"avg_hr": None, "avg_rmssd": None}
+    no_face   = {"avg_valence": None, "avg_arousal": None, "avg_ear": None}
+    shared_desktop = {"avg_activity_pct": 60.0, "total_window_switches": 5}
+
+    idx_ide = fusion.score(
+        no_physio, no_face,
+        {**shared_desktop, "dominant_category": "IDE/Terminal"},
+    )
+    idx_media = fusion.score(
+        no_physio, no_face,
+        {**shared_desktop, "dominant_category": "Media"},
+    )
+
+    assert idx_ide > idx_media, (
+        f"Expected IDE/Terminal ({idx_ide:.3f}) > Media ({idx_media:.3f})"
+    )
+
+
+def test_desktop_category_unknown(fusion):
+    """Category labels not in the Flutter taxonomy (e.g. legacy 'Academic Work'
+    from old test data) must not crash and must return a valid stress_index
+    in [0, 1], falling back to the 'Other' weight (0.2).
+    """
+    idx = fusion.score(
+        {"avg_hr": None, "avg_rmssd": None},
+        {"avg_valence": None, "avg_arousal": None, "avg_ear": None},
+        {
+            "avg_activity_pct": 50.0,
+            "total_window_switches": 5,
+            "dominant_category": "Academic Work",   # not in Flutter taxonomy
+        },
+    )
+    assert 0.0 <= idx <= 1.0, f"score out of range: {idx}"
+    # With Other weight=0.2, activity=50%→0.5, switches=5/20=0.25 → mean≈0.317
+    assert idx > 0.0, "score should be non-zero when desktop data is present"

@@ -6,7 +6,7 @@ MSc Thesis — Dimitris Moforis, University of Piraeus, Dept. of Digital Systems
 
 Design
 ------
-  Primary:  Ollama (Llama 3.2 8B) — single-shot prompt engineered for
+  Primary:  Ollama (Llama 3.1 8B) — single-shot prompt engineered for
             a short, friendly, context-aware recommendation.
             2-second timeout (same as classifier).
   Fallback: Template-based messages selected by trigger type.
@@ -100,7 +100,7 @@ class WellbeingRecommender:
     """
     Generates contextual well-being recommendations.
 
-    Primary path:  Ollama (Llama 3.2 8B) with 2-second timeout.
+    Primary path:  Ollama (Llama 3.1 8B) with 2-second timeout.
     Fallback path: Rotating template messages.
 
     The same _ollama_ok probe strategy as WindowClassifier is used:
