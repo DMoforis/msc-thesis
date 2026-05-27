@@ -217,6 +217,7 @@ Test-Path src\desktop\build\windows\x64\runner\Release\desktop_monitor.exe
 
 - **No face data:** ensure there is good, even frontal lighting on your face. Avoid backlighting (bright window behind you). The rPPG signal requires a visible face region in every frame.
 - **RMSSD showing `—`:** normal for the first 5 minutes of each session. HRV metrics require a clean 5-minute rPPG signal. The `—` will be replaced with a value once the first HRV window completes.
+- **Heart rate showing `—`:** the system rejects readings outside 40–200 BPM as physiologically implausible. This is expected during the first 10 seconds while the rPPG signal accumulates. If it persists, ensure your face is well-lit and centred in the camera frame.
 
 ### Stress score seems too high or too low
 

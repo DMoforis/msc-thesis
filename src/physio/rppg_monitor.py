@@ -56,6 +56,7 @@ def init_database(db_path: str = DB_PATH) -> sqlite3.Connection:
     Migration strategy: use ALTER TABLE to add new columns if they don't exist,
     so existing Phase 1 data is preserved.
     """
+    os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
     conn = sqlite3.connect(db_path)
 
     conn.execute("""
@@ -79,7 +80,7 @@ def init_database(db_path: str = DB_PATH) -> sqlite3.Connection:
             conn.execute(f"ALTER TABLE physio_readings ADD COLUMN {column_def}")
             conn.commit()
         except sqlite3.OperationalError:
-            pass   # column already exists
+            pass   # column already exists in this database — no action needed
 
     print(f"[DB] physio_readings table ready → {db_path}")
     return conn

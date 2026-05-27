@@ -123,7 +123,6 @@ _TRIGGER_COLORS: dict[str, str] = {
     "positive_flow":   "green",
 }
 
-# App-category → theme colour key for the DesktopCard badge
 # App-category → theme colour key for the DesktopCard badge.
 # Keys must match the exact strings written by src/desktop/lib/main.dart.
 _CATEGORY_COLORS: dict[str, str] = {
@@ -265,7 +264,7 @@ def _fetch_trend(conn, minutes: int = 60) -> tuple[list[float], list[float]]:
                 times.append(ts.timestamp())
                 values.append(float(row["stress_index"]))
             except (ValueError, TypeError):
-                pass
+                pass   # skip rows with malformed timestamps
         return times, values
     except Exception:
         return [], []
@@ -313,7 +312,7 @@ def _fetch_session_stats(conn) -> dict:
                 "n_notifs":   int(row["n_notifs"] or 0),
             }
     except Exception:
-        pass
+        pass   # DB error or missing table — fall through to empty defaults
     return {"duration": 0, "n_windows": 0, "avg_stress": None, "max_stress": None, "n_notifs": 0}
 
 
@@ -338,7 +337,7 @@ def _is_system_active(conn) -> bool:
             if row is not None:
                 return True
         except Exception:
-            pass
+            pass   # table not yet created — check the other table before returning False
     return False
 
 
@@ -452,6 +451,7 @@ if _HAS_PG:
             self.setLabel(text="Time", units=None)
 
         def tickStrings(self, values, scale, spacing):   # noqa: N802
+            """Convert Unix-timestamp tick positions to HH:MM label strings."""
             result = []
             for v in values:
                 try:
@@ -495,6 +495,7 @@ class CameraThread(QThread):
         self._paused  = False
 
     def run(self) -> None:
+        """Capture loop: open VideoCapture, emit frames at ~15 FPS until stopped."""
         if not _HAS_CV2:
             return
         cap = _cv2.VideoCapture(self._index, _cv2.CAP_DSHOW)
@@ -514,12 +515,15 @@ class CameraThread(QThread):
         cap.release()
 
     def request_stop(self) -> None:
+        """Signal the capture loop to exit on its next iteration."""
         self._stop = True
 
     def pause(self) -> None:
+        """Suspend frame emission without stopping the thread (e.g. window minimised)."""
         self._paused = True
 
     def resume(self) -> None:
+        """Resume frame emission after a pause."""
         self._paused = False
 
 
@@ -677,6 +681,7 @@ class CameraFeedWidget(QWidget):
         self._thread.start()
 
     def stop_capture(self) -> None:
+        """Fully stop the camera thread (or file-poll timer) and clear the display."""
         if self._file_timer is not None:
             self._file_timer.stop()
         self._stop_thread()
@@ -684,12 +689,14 @@ class CameraFeedWidget(QWidget):
         self._cam_lbl.setText("No Camera" if self._is_standalone else "Waiting for data…")
 
     def pause_capture(self) -> None:
+        """Suspend feed updates without destroying the thread (window minimised)."""
         if self._file_timer is not None:
             self._file_timer.stop()
         if self._thread:
             self._thread.pause()
 
     def resume_capture(self) -> None:
+        """Resume feed updates after a pause."""
         if self._file_timer is not None:
             self._file_timer.start(200)
         if self._thread:
@@ -719,10 +726,12 @@ class StressGauge(QWidget):
         self.setFixedSize(160, 160)
 
     def set_value(self, v: float | None) -> None:
+        """Update gauge to *v* (0–1) and trigger a repaint. Pass None to show '—'."""
         self._value = v
         self.update()
 
     def paintEvent(self, _):  # noqa: N802
+        """Draw the 240° arc track, filled value arc, and centred numeric label."""
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
@@ -809,6 +818,14 @@ class MetricCard(QFrame):
         )
 
     def set_value(self, val: float | None, color: str | None = None) -> None:
+        """
+        Display *val* in the card value label.
+
+        Numbers ≥ 10 are formatted as integers; smaller values keep one decimal
+        place (e.g. RMSSD can be 8.4 ms).  Pass *color* as a hex string to
+        override the default text colour (used for stress-index colour coding).
+        Pass None to show '—'.
+        """
         if val is None:
             self._val_lbl.setText("—")
             self._val_lbl.setStyleSheet(
@@ -823,6 +840,7 @@ class MetricCard(QFrame):
             )
 
     def apply_theme(self) -> None:
+        """Re-apply active theme colours to the card frame and labels."""
         self._refresh_style()
         self._lbl.setStyleSheet(f"color: {c('sub')}; font-size: 11px;")
         self._unit_lbl.setStyleSheet(
@@ -848,11 +866,18 @@ class VAWidget(QWidget):
         )
 
     def set_va(self, valence: float | None, arousal: float | None) -> None:
+        """Update the displayed V/A position and trigger a repaint."""
         self._valence = valence
         self._arousal = arousal
         self.update()
 
     def paintEvent(self, _):  # noqa: N802
+        """
+        Draw the 2D V/A scatter plot: border, axis cross, quadrant labels,
+        and a coloured dot at the current (valence, arousal) position.
+        Valence maps to the x-axis (−1 left, +1 right) and arousal to the
+        y-axis (−1 bottom, +1 top), matching Russell's (1980) circumplex.
+        """
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
@@ -1065,6 +1090,7 @@ class DesktopCard(QFrame):
                 self._ts_lbl.setText("")
 
     def apply_theme(self) -> None:
+        """Re-apply active theme colours to the card frame and activity bar."""
         self._refresh_style()
         self._act_bar.setStyleSheet(self._bar_style())
 
@@ -1078,10 +1104,12 @@ class StatusDot(QWidget):
         self.setFixedSize(12, 12)
 
     def set_active(self, v: bool) -> None:
+        """Switch the dot to green (active) or grey (inactive) and repaint."""
         self._active = v
         self.update()
 
     def paintEvent(self, _):  # noqa: N802
+        """Draw a filled circle: green when active, theme-sub-colour otherwise."""
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         col = c("green") if self._active else c("sub")
@@ -1184,6 +1212,16 @@ class LeftPanel(QWidget):
         desktop_raw: dict | None = None,
         face_raw:    dict | None = None,
     ) -> None:
+        """
+        Push the latest aggregated-window data to all left-panel widgets.
+
+        Parameters
+        ----------
+        data        : most recent aggregated_windows row (from _fetch_latest)
+        active      : True if the monitoring backend wrote data in the last 2 min
+        desktop_raw : most recent desktop_readings row (from _fetch_latest_desktop)
+        face_raw    : most recent face_readings row (from _fetch_latest_face)
+        """
         if data:
             self.gauge.set_value(data.get("stress_index"))
             self.hr_card.set_value(data.get("avg_hr"))
@@ -1342,6 +1380,17 @@ class CenterPanel(QWidget):
     # ── Public update methods ─────────────────────────────────────────────────
 
     def refresh_trend(self, times: list[float], values: list[float]) -> None:
+        """
+        Update the 60-minute stress trend plot.
+
+        Parameters
+        ----------
+        times  : Unix timestamps (float seconds) for each data point
+        values : Corresponding stress_index values in [0, 1]
+
+        If fewer than 2 points are provided the plot is hidden and a
+        "No data" placeholder label is shown instead.
+        """
         if not _HAS_PG:
             return
 
@@ -1378,6 +1427,12 @@ class CenterPanel(QWidget):
         # so tickStrings receives true Unix timestamps → HH:MM labels
 
     def refresh_stats(self, stats: dict) -> None:
+        """
+        Populate the session stats bar from the *stats* dict.
+
+        Expected keys: ``duration`` (minutes int), ``avg_stress``, ``max_stress``
+        (floats or None), ``n_notifs`` (int).  Missing keys default to 0 / '—'.
+        """
         dur = stats.get("duration", 0)
         h, m = divmod(int(dur), 60)
         self._stat_dur._val_lbl.setText(  # type: ignore[attr-defined]
@@ -1479,6 +1534,13 @@ class RightPanel(QWidget):
         lay.addWidget(self._settings_btn)
 
     def refresh(self, interventions: list[dict]) -> None:
+        """
+        Rebuild the intervention log list from the supplied rows.
+
+        Each dict must contain 'timestamp', 'trigger_reason', and 'message'
+        keys (as returned by _fetch_interventions).  The list is fully cleared
+        and repopulated on every call.
+        """
         self.list_w.clear()
         for item in interventions:
             ts     = item.get("timestamp", "")
@@ -1795,7 +1857,7 @@ class DashboardWindow(QMainWindow):
             try:
                 self._conn.close()
             except Exception:
-                pass
+                pass   # ignore close errors during reconnection attempt
             self._conn = _db_connect(self._db_path)
 
     # ── Action slots ──────────────────────────────────────────────────────────
@@ -1844,6 +1906,7 @@ class DashboardWindow(QMainWindow):
                     cam.resume_capture()
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        """Stop the refresh timer, camera thread, and DB connection before quitting."""
         self._timer.stop()
         # Stop camera thread before closing
         cam = self._left.camera_widget
@@ -1853,7 +1916,7 @@ class DashboardWindow(QMainWindow):
             try:
                 self._conn.close()
             except Exception:
-                pass
+                pass   # silently ignore if the connection was already closed
         super().closeEvent(event)
 
 

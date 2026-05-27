@@ -86,6 +86,7 @@ def init_database(db_path: str = DB_PATH) -> sqlite3.Connection:
     New Phase 2 columns (valence, arousal) are added via ALTER TABLE if the
     table was created by Phase 1, so existing data is preserved.
     """
+    os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS face_readings (
@@ -110,7 +111,7 @@ def init_database(db_path: str = DB_PATH) -> sqlite3.Connection:
             conn.execute(f"ALTER TABLE face_readings ADD COLUMN {col}")
             conn.commit()
         except sqlite3.OperationalError:
-            pass
+            pass   # column already exists in this database — no action needed
 
     print(f"[DB] face_readings table ready → {db_path}")
     return conn
