@@ -222,6 +222,8 @@ class Aggregator:
                 delivered = self._fire_intervention(
                     trigger_reason, stress_index, face_agg, desktop_agg
                 )
+                if delivered:
+                    self._commit_delivery(trigger_reason)
 
             self._save_window(
                 conn, window_start, window_end,
@@ -384,7 +386,6 @@ class Aggregator:
                 self._consecutive_idle = 0
 
             if trigger:
-                self._last_intervention_time = now
                 return trigger
 
         # ── Positive flow: separate cooldown + once-per-session cap ───────
@@ -396,12 +397,25 @@ class Aggregator:
         if (self._consecutive_flow >= 2
                 and self._flow_notifs_sent < MAX_FLOW_NOTIFS_PER_SESSION
                 and flow_cooldown_ok):
-            self._consecutive_flow    = 0
-            self._last_flow_notif_time = now
-            self._flow_notifs_sent    += 1
+            self._consecutive_flow = 0
             return "positive_flow"
 
         return None
+
+    def _commit_delivery(self, trigger_reason: str) -> None:
+        """
+        Update cooldown/session state after a notification is confirmed delivered.
+
+        Called from _run_window() only when _fire_intervention() returns True.
+        Keeping state updates here (rather than inside _check_interventions)
+        ensures a suppressed delivery does NOT consume the cooldown window.
+        """
+        now = datetime.now()
+        if trigger_reason == "positive_flow":
+            self._last_flow_notif_time = now
+            self._flow_notifs_sent    += 1
+        else:
+            self._last_intervention_time = now
 
     def _fire_intervention(
         self,

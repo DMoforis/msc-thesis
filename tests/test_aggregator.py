@@ -140,6 +140,9 @@ def test_flow_fires_once_per_session(agg):
     agg._check_interventions(0.10, face, desktop)
     r1 = agg._check_interventions(0.10, face, desktop)
     assert r1 == "positive_flow"
+
+    # Simulate confirmed delivery — _run_window() calls _commit_delivery() here.
+    agg._commit_delivery(r1)
     assert agg._flow_notifs_sent == 1
 
     # Fast-forward flow cooldown so it is no longer the limiting factor.
@@ -170,6 +173,9 @@ def test_cooldown_prevents_double_trigger(agg):
     agg._check_interventions(0.70, face, desktop)
     r1 = agg._check_interventions(0.70, face, desktop)
     assert r1 == "high_stress"
+
+    # Simulate confirmed delivery — _run_window() calls _commit_delivery() here.
+    agg._commit_delivery(r1)
     assert agg._last_intervention_time is not None
 
     # Conditions still met, but standard cooldown is active.
@@ -191,12 +197,75 @@ def test_flow_cooldown_independent_of_standard_cooldown(agg):
     face_flow   = _face(valence=0.30, arousal=0.20, blink_rate=15.0)
     desktop     = _desktop(activity=75.0)
 
-    # Trigger high_stress to start the standard cooldown.
+    # Trigger high_stress and simulate delivery to activate the standard cooldown.
     agg._check_interventions(0.70, face_stress, desktop)
-    agg._check_interventions(0.70, face_stress, desktop)   # fires high_stress
+    r_stress = agg._check_interventions(0.70, face_stress, desktop)   # fires high_stress
+    assert r_stress == "high_stress"
+    agg._commit_delivery(r_stress)   # sets _last_intervention_time → standard cooldown active
 
     # Standard cooldown is now active, but flow uses a separate one.
     # Prime the flow counter to threshold.
     agg._consecutive_flow = 2
     r = agg._check_interventions(0.10, face_flow, desktop)
     assert r == "positive_flow"   # flow fires despite standard cooldown being active
+
+
+# ── Delivery-gated cooldown regression tests ──────────────────────────────────
+
+def test_fire_intervention_updates_cooldown_only_on_delivery(agg):
+    """
+    _check_interventions() must NOT consume the standard cooldown.
+    Only _commit_delivery() should set _last_intervention_time.
+    If a trigger fires but delivery is suppressed, the cooldown must remain
+    available so the next window can retry.
+    """
+    face    = _face(valence=-0.50, arousal=0.50)
+    desktop = _desktop(activity=60.0)
+
+    # Two windows → trigger detected.
+    agg._check_interventions(0.70, face, desktop)
+    r = agg._check_interventions(0.70, face, desktop)
+    assert r == "high_stress"
+
+    # Cooldown NOT yet consumed — _commit_delivery() has not been called.
+    assert agg._last_intervention_time is None
+
+    # Simulate delivery confirmed.
+    agg._commit_delivery(r)
+
+    # Now cooldown IS consumed.
+    assert agg._last_intervention_time is not None
+
+    # Next window is blocked by cooldown.
+    r2 = agg._check_interventions(0.70, face, desktop)
+    assert r2 is None
+
+
+def test_positive_flow_session_cap_only_on_delivery(agg):
+    """
+    _flow_notifs_sent must NOT be incremented by _check_interventions().
+    Only _commit_delivery() should increment it.
+    A suppressed flow delivery must not consume the once-per-session cap.
+    """
+    face    = _face(valence=0.30, arousal=0.20, blink_rate=15.0)
+    desktop = _desktop(activity=75.0)
+
+    # Two windows → flow trigger detected.
+    agg._check_interventions(0.10, face, desktop)
+    r = agg._check_interventions(0.10, face, desktop)
+    assert r == "positive_flow"
+
+    # Session counter NOT yet incremented — delivery not confirmed.
+    assert agg._flow_notifs_sent == 0
+
+    # Simulate delivery confirmed.
+    agg._commit_delivery(r)
+    assert agg._flow_notifs_sent == 1
+
+    # Reset flow cooldown so time is not the limiting factor.
+    agg._last_flow_notif_time = datetime.now() - timedelta(minutes=35)
+    agg._consecutive_flow = 2
+
+    # Session cap (MAX_FLOW_NOTIFS_PER_SESSION = 1) now blocks a second fire.
+    r2 = agg._check_interventions(0.10, face, desktop)
+    assert r2 != "positive_flow"

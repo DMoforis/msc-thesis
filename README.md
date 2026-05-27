@@ -21,7 +21,7 @@ Stress scoring is individually calibrated: a two-minute resting baseline session
 |----------|-------------|-------------|
 | Physiological | Webcam (rPPG) | Heart rate (BPM), RMSSD, LF/HF ratio |
 | Facial analysis | Webcam (MediaPipe + EmoNet-8) | Blink rate, EAR, head pose, valence, arousal, emotion label |
-| Desktop context | Windows OS (Flutter + win32) | Active window, keyword-classified category (LLM available for offline analysis), idle time, activity %, window switches |
+| Desktop context | Windows OS (Flutter + win32) | Active window, keyword-classified live category (LLM available offline), idle time, activity %, window switches |
 
 ---
 
@@ -92,7 +92,7 @@ Stress scoring is individually calibrated: a two-minute resting baseline session
 | Face monitor | `src/face/face_monitor.py` | MediaPipe 468-landmark mesh → EAR, blink rate, head pose every 30 s; writes annotated preview frame to shared JPEG for dashboard |
 | Valence-Arousal | `src/face/valence_arousal.py` | EmoNet-8 (Toisoul et al., 2021) → continuous valence and arousal from face crop |
 | Emotion labels | `src/utils/emotion_labels.py` | Maps VA coordinates to Russell (1980) circumplex quadrant labels |
-| Desktop monitor | `src/desktop/lib/main.dart` | Flutter + win32 → active window title, keyword-classified category (LLM available for offline analysis), idle time, activity %, window switches |
+| Desktop monitor | `src/desktop/lib/main.dart` | Flutter + win32 → active window title, keyword-classified live category (LLM available offline), idle time, activity %, window switches |
 | LLM classifier | `src/llm/classifier.py` | Llama 3.1 8B classifies window titles into nine activity categories; LRU-cached; keyword fallback |
 | LLM recommender | `src/llm/recommender.py` | Generates contextual natural-language recommendations; per-trigger guidance injected into prompt; template fallback |
 | Aggregator | `src/fusion/aggregator.py` | Background thread; merges raw readings into 5-min summary windows; evaluates all six intervention trigger conditions |
@@ -354,7 +354,7 @@ Output: `data/exports/stress_analysis_<date>.xlsx`
 ### Test suite
 
 ```powershell
-pytest tests/ -v   # 71 tests
+pytest tests/ -v   # 75 tests
 ```
 
 ---
@@ -540,7 +540,7 @@ stress_detection/
 │       ├── baseline.py                ← personal baseline calibration
 │       └── emotion_labels.py          ← Russell (1980) VA → emotion label mapping
 │
-└── tests/                             ← 71 tests
+└── tests/                             ← 75 tests
     ├── conftest.py                    ← shared fixtures
     ├── test_ear.py                    ← EAR formula and blink detection
     ├── test_hrv.py                    ← RMSSD computation and validation
