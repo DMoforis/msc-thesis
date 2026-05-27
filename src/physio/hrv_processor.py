@@ -66,6 +66,8 @@ def validate_hrv_metrics(
     else:
         hr_consistent = True   # no 10 s data yet — accept tentatively
 
+    # Open interval: values exactly at a boundary (e.g. 5.0 ms, 80.0 ms) are
+    # rejected.  In practice rPPG signals never land exactly on these limits.
     rmssd = (
         round(rmssd_raw, 1)
         if (rmssd_raw is not None and _RMSSD_LOWER < rmssd_raw < _RMSSD_UPPER and hr_consistent)

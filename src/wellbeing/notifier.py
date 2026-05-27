@@ -30,7 +30,11 @@ _ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from src.utils.config import DB_PATH, MIN_MINUTES_BETWEEN_NOTIFS
+from src.utils.config import (
+    DB_PATH,
+    MIN_MINUTES_BETWEEN_NOTIFS,
+    MIN_MINUTES_BETWEEN_FLOW_NOTIFS,
+)
 from src.utils.db import open_db, ensure_interventions_table
 
 
@@ -112,7 +116,7 @@ class WindowsNotifier:
         -------
         True if delivered, False if suppressed by cooldown or on error.
         """
-        if not self._cooldown_ok():
+        if not self._cooldown_ok(trigger_reason):
             return False
 
         delivered = self._deliver(title, message)
@@ -125,12 +129,23 @@ class WindowsNotifier:
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
-    def _cooldown_ok(self) -> bool:
-        """Return True if enough time has elapsed since the last notification."""
+    def _cooldown_ok(self, trigger_reason: str | None = None) -> bool:
+        """
+        Return True if enough time has elapsed since the last notification.
+
+        Uses the trigger-type-specific cooldown so that a positive_flow
+        notification does not consume the standard 15-minute cooldown window.
+        This keeps the notifier in sync with the aggregator's per-type logic.
+        """
         if self._last_sent is None:
             return True
+        threshold = (
+            MIN_MINUTES_BETWEEN_FLOW_NOTIFS
+            if trigger_reason == "positive_flow"
+            else MIN_MINUTES_BETWEEN_NOTIFS
+        )
         elapsed = (datetime.now() - self._last_sent).total_seconds() / 60.0
-        return elapsed >= MIN_MINUTES_BETWEEN_NOTIFS
+        return elapsed >= threshold
 
     def _deliver(self, title: str, message: str) -> bool:
         """Dispatch to the available notification backend."""

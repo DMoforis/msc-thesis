@@ -114,13 +114,6 @@ _KEYWORD_RULES: list[tuple[str, list[str]]] = [
     ("Social Media", [
         "youtube",
     ]),
-    ("Document Editing", [
-        "microsoft word", "google docs", "libreoffice writer",
-        "microsoft excel", "google sheets", "libreoffice calc",
-        "microsoft powerpoint", "google slides", "libreoffice impress",
-        "notion", "onenote", "evernote", "obsidian", "logseq",
-        "notepad", "notepad++", "sublime text", "typora",
-    ]),
     ("Research / Reading", [
         "wikipedia", "wiki", "medium.com", "substack", "blog",
         "bbc news", "cnn", "reuters", "guardian", "nytimes",

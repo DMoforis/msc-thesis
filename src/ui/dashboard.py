@@ -124,16 +124,15 @@ _TRIGGER_COLORS: dict[str, str] = {
 }
 
 # App-category → theme colour key for the DesktopCard badge
+# App-category → theme colour key for the DesktopCard badge.
+# Keys must match the exact strings written by src/desktop/lib/main.dart.
 _CATEGORY_COLORS: dict[str, str] = {
-    "Software Development": "accent",
-    "Academic Work":        "green",
-    "Document Editing":     "accent",
-    "Communication":        "sub",
-    "Social Media":         "orange",
-    "Entertainment":        "yellow",
-    "Web Browsing":         "sub",
-    "System/Utilities":     "sub",
-    "Other":                "sub",
+    "IDE/Terminal":  "accent",
+    "Document":      "accent",
+    "Communication": "sub",
+    "Browser":       "sub",
+    "Media":         "yellow",
+    "Other":         "sub",
 }
 
 

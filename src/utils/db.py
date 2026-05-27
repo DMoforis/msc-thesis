@@ -33,7 +33,11 @@ def open_db(db_path: str = DB_PATH) -> sqlite3.Connection:
 
     WAL journal mode: concurrent readers do not block a writer and vice versa.
     Row factory: columns accessible by name (row['heart_rate']) as well as index.
+
+    The parent directory is created automatically so a fresh clone works without
+    a pre-existing data/ folder.
     """
+    os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.row_factory = sqlite3.Row

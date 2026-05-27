@@ -189,7 +189,6 @@ To close: close the dashboard window, or press **Ctrl+C** in the terminal. All b
 ```powershell
 # Dashboard only — connect to an already-running backend
 python dashboard.py
-python dashboard.py --ui-only
 
 # Backend only — no dashboard (original headless mode)
 python run_all.py --no-ui
