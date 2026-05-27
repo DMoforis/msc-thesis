@@ -69,12 +69,14 @@ CREATE TABLE physio_readings (
 - Roll° computation fixed using quaternion decomposition
 
 **Valence-Arousal model:**
-- Model: `Mavdol/NPC-Valence-Arousal-Prediction` from HuggingFace
-- Runs locally via transformers library, GPU-accelerated via CUDA
-- Input: cropped face image from MediaPipe bounding box
-- Output: valence (-1 to 1), arousal (-1 to 1)
+- Model: **EmoNet-8** (Toisoul et al., 2021) — `data/models/emonet_8.pth`
+- Architecture: `data/models/emonet_arch.py` (8-class emotion backbone repurposed for VA regression)
+- Runs locally via PyTorch, GPU-accelerated via CUDA (CPU fallback supported)
+- Input: cropped face image from MediaPipe bounding box (resized to 256×256)
+- Output: valence (−1 to +1), arousal (−1 to +1)
 - Valence: negative = unpleasant/stressed, positive = pleasant/relaxed
 - Arousal: low = drowsy/disengaged, high = alert/excited
+- *Note: original SPEC referenced `Mavdol/NPC-Valence-Arousal-Prediction` (HuggingFace transformers). Changed to EmoNet-8 for more accurate facial affect estimation and lower GPU memory footprint.*
 
 **Updated schema:**
 ```sql
@@ -88,7 +90,8 @@ CREATE TABLE face_readings (
     roll_deg          REAL,   -- fixed: quaternion decomposition
     face_detected_pct REAL,
     valence           REAL,   -- -1 to 1
-    arousal           REAL    -- -1 to 1
+    arousal           REAL,   -- -1 to 1
+    emotion_label     TEXT    -- Russell (1980) circumplex quadrant label
 );
 ```
 
@@ -98,15 +101,26 @@ CREATE TABLE face_readings (
 
 **Files:** `src/llm/classifier.py`, `src/llm/recommender.py`
 
-**Setup requirement:** Ollama installed locally with Llama 3.2 8B pulled.
+**Setup requirement:** Ollama installed locally with Llama 3.1 8B pulled.
 ```bash
 # One-time setup:
-ollama pull llama3.2:8b
+ollama pull llama3.1:8b
 ```
 
 ### 4a. Window Title Classifier
 
 **Purpose:** Replace hardcoded keyword matching with intelligent LLM classification.
+
+> **Important implementation note — Flutter/Python architecture constraint:**
+> The desktop context data (active window title, idle time, activity %) is written
+> directly to `desktop_readings` by the Flutter native Windows subprocess.  Because
+> Flutter is a Dart/compiled binary it cannot call the Python Ollama client at
+> runtime.  As a result, the **`app_category` field written by Flutter uses
+> keyword-based rules** (defined in `src/desktop/lib/main.dart`) rather than
+> live Ollama inference.  The Python `src/llm/classifier.py` module is available
+> for offline re-classification of stored window titles, but is not called in the
+> live monitoring pipeline.  This is documented as a known limitation in the
+> thesis (see §Known Limitations).
 
 **Interface:**
 ```python
@@ -130,7 +144,7 @@ category = classifier.classify("Facebook")
 - Other
 
 **Implementation notes:**
-- Uses Ollama Python client to call local Llama 3.2 8B
+- Uses Ollama Python client to call local Llama 3.1 8B
 - Prompt engineered for single-word/short category response
 - Response cached: same title always returns same category (LRU cache)
 - Falls back to keyword matching if Ollama is not running
@@ -327,7 +341,7 @@ AROUSAL_LOW_THRESHOLD       = 0.2
 MIN_MINUTES_BETWEEN_NOTIFS  = 15
 
 # Ollama
-OLLAMA_MODEL   = "llama3.2:8b"
+OLLAMA_MODEL   = "llama3.1:8b"
 OLLAMA_TIMEOUT = 2  # seconds
 
 # Paths
@@ -344,10 +358,10 @@ EXPORT_DIR   = os.path.join(BASE_DIR, "data", "exports")
 # 1. Download Ollama from https://ollama.com/download/windows
 # 2. Install and restart terminal
 # 3. Pull the model (downloads ~5GB, stored locally)
-ollama pull llama3.2:8b
+ollama pull llama3.1:8b
 
 # 4. Verify it works
-ollama run llama3.2:8b "Say hello in one sentence"
+ollama run llama3.1:8b "Say hello in one sentence"
 
 # 5. Install Python client
 pip install ollama
@@ -390,3 +404,15 @@ pip freeze > requirements.txt
 - Measures: self-reported stress (Likert 1-5), intervention usefulness rating
 - Analysis: descriptive statistics + correlation matrix (exported to Excel)
 - Primary metric: stress_index accuracy vs self-reported ground truth
+
+---
+
+## Known Limitations
+
+| Limitation | Detail |
+|------------|--------|
+| Desktop window classification | The Flutter subprocess (`src/desktop/lib/main.dart`) writes `app_category` to the database using keyword-based rules implemented in Dart. The compiled Flutter binary cannot call the Python Ollama client at runtime (cross-process, cross-language boundary). `src/llm/classifier.py` exists for offline re-classification of stored titles and for post-hoc thesis analysis, but is **not** invoked during live monitoring sessions. |
+| Roll° instability | The atan2 Euler decomposition is unstable at extreme pitch angles (±60°+). Roll° values in those regions are unreliable. |
+| LF/HF at short windows | Frequency-domain HRV requires ≥5 min of clean BVP signal. LF/HF is NULL early in each session. |
+| rPPG SQI under office lighting | Typical SQI is 0.35–0.50. HRV metrics are suppressed when SQI < 0.5. Stable frontal lighting improves quality. |
+| EmoNet-8 model files not in git | `data/models/emonet_8.pth` (~170 MB) and `data/models/emonet_arch.py` are excluded from the repository (`.gitignore`). They must be downloaded separately. VA inference degrades gracefully to `NULL` if the model is absent. |

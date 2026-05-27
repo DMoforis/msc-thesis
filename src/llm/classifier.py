@@ -9,7 +9,7 @@ categories used by the fusion layer and intervention engine.
 
 Design
 ------
-  1. Primary path:  Ollama (local Llama 3.2 8B, GPU via CUDA).
+  1. Primary path:  Ollama (local Llama 3.1 8B, GPU via CUDA).
                     Single-shot prompt engineered for a one-word category reply.
                     2-second timeout enforced via a thread pool future.
   2. Fallback path: Rule-based keyword matching.
@@ -25,7 +25,7 @@ Categories
 
 Ollama setup (one-time — see SPEC.md §10)
 -----------------------------------------
-  ollama pull llama3.2:8b
+  ollama pull llama3.1:8b
   pip install ollama
 
 Once Ollama is running, this module switches to LLM mode automatically.
@@ -228,7 +228,7 @@ class WindowClassifier:
             print(
                 "[Classifier] ollama library not installed — using keyword fallback.\n"
                 "[Classifier]   Install: pip install ollama\n"
-                "[Classifier]   Then:    ollama pull llama3.2:8b"
+                "[Classifier]   Then:    ollama pull llama3.1:8b"
             )
             self._ollama_ok = False
 

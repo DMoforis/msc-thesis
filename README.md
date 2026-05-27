@@ -97,8 +97,7 @@ Stress scoring is individually calibrated: a two-minute resting baseline session
 | LLM recommender | `src/llm/recommender.py` | Generates contextual natural-language recommendations; per-trigger guidance injected into prompt; template fallback |
 | Aggregator | `src/fusion/aggregator.py` | Background thread; merges raw readings into 5-min summary windows; evaluates all six intervention trigger conditions |
 | Late fusion | `src/fusion/late_fusion.py` | Weighted combination of per-modality stress scores; missing modalities are excluded and remaining weights renormalised |
-| Intervention engine | `src/wellbeing/interventions.py` | Trigger logic, cooldown enforcement, and per-trigger LLM prompt construction |
-| Notifier | `src/wellbeing/notifier.py` | Windows desktop toast notifications (windows-toasts / BurntToast fallback) |
+| Notifier | `src/wellbeing/notifier.py` | Windows desktop toast notifications (windows-toasts / WinRT); logs every delivery to `interventions` table |
 | Baseline calibrator | `src/utils/baseline.py` | 2-minute resting session recording personal HR, RMSSD, EAR, blink rate, valence, and arousal |
 | Dashboard UI | `src/ui/dashboard.py` | PyQt6 three-panel dashboard: stress gauge, VA scatter, trend graph, intervention log, settings, live camera feed |
 
@@ -479,6 +478,7 @@ CREATE TABLE user_feedback (
 | LF/HF at short windows | Frequency-domain HRV requires at least 5 minutes of clean signal. LF/HF values will be `NULL` during the early phase of each session. |
 | rPPG signal quality | rPPG SQI under typical office lighting is approximately 0.35–0.50. HRV metrics are suppressed when SQI < 0.5. Stable frontal lighting and avoiding rapid head movements improve signal quality. |
 | Dashboard JPEG warnings | The terminal may show occasional "Corrupt JPEG data: premature end of data segment" warnings from the camera feed widget. These are cosmetic only — the atomic write pattern (`os.replace`) eliminates data corruption; Qt occasionally reads a frame before the file metadata is fully flushed. Data collection is not affected. |
+| Desktop window classification | The Flutter subprocess writes `app_category` using keyword-based rules (Dart cannot call the Python Ollama client at runtime). The Python `src/llm/classifier.py` module is available for offline re-classification of stored window titles but is not invoked during live monitoring. |
 | Pilot study scope | The pilot study is limited to personal computer use due to workplace NDA constraints. Data collected from a single workstation during MSc thesis preparation. |
 
 ---
@@ -515,8 +515,6 @@ stress_detection/
 │   │
 │   ├── face/
 │   │   ├── face_monitor.py            ← EAR, blink rate, head pose (30 s); shared frame file
-│   │   ├── ear_blink.py               ← EAR formula + blink event detection
-│   │   ├── head_pose.py               ← solvePnP head pose estimation
 │   │   └── valence_arousal.py         ← EmoNet-8 continuous VA prediction
 │   │
 │   ├── desktop/
@@ -531,7 +529,6 @@ stress_detection/
 │   │   └── aggregator.py             ← 5-minute aggregation + 6-trigger intervention engine
 │   │
 │   ├── wellbeing/
-│   │   ├── interventions.py           ← trigger logic and cooldown management
 │   │   └── notifier.py                ← Windows desktop toast notifications
 │   │
 │   ├── ui/
@@ -541,8 +538,7 @@ stress_detection/
 │       ├── db.py                      ← shared SQLite helpers (WAL, row factory)
 │       ├── config.py                  ← all configuration constants
 │       ├── baseline.py                ← personal baseline calibration
-│       ├── emotion_labels.py          ← Russell (1980) VA → emotion label mapping
-│       └── logger.py                  ← structured logging
+│       └── emotion_labels.py          ← Russell (1980) VA → emotion label mapping
 │
 └── tests/                             ← 71 tests
     ├── conftest.py                    ← shared fixtures
@@ -551,7 +547,7 @@ stress_detection/
     ├── test_fusion.py                 ← LateFusion scoring and weight renormalisation
     ├── test_aggregator.py             ← 6-trigger intervention logic
     ├── test_db.py                     ← database helpers and timestamp normalisation
-    └── test_llm.py                    ← LLM classifier smoke tests
+    └── test_emotion_labels.py         ← Russell (1980) VA → emotion label mapping
 ```
 
 ---

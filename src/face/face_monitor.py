@@ -17,8 +17,8 @@ Why these metrics?
     (Stern et al. 1994; Benedetto et al. 2011; Soukupova & Cech 2016).
   - Head pose: pitch (nodding), yaw (looking away) correlate with attention
     and fatigue in driver-drowsiness and knowledge-worker studies.
-  - Valence / Arousal: Russell (1980) circumplex model of affect; planned via
-    HuggingFace Mavdol/NPC-Valence-Arousal-Prediction model.
+  - Valence / Arousal: Russell (1980) circumplex model of affect; implemented
+    via EmoNet-8 (Toisoul et al., 2021) running locally in PyTorch.
 
 Dependencies (already installed via open-rppg):
   pip install mediapipe opencv-python numpy

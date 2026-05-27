@@ -54,8 +54,8 @@ All processing is **fully local** — no data leaves the machine. Privacy-by-des
 | Face landmarks + mesh | MediaPipe Face Mesh |
 | rPPG heart rate | open-rppg (FacePhys model) |
 | HRV computation | neurokit2 |
-| Valence-Arousal | HuggingFace `Mavdol/NPC-Valence-Arousal-Prediction` |
-| Local LLM | Ollama + Llama 3.2 8B (GPU via CUDA) |
+| Valence-Arousal | EmoNet-8 (Toisoul et al. 2021), PyTorch, GPU via CUDA |
+| Local LLM | Ollama + Llama 3.1 8B (GPU via CUDA) |
 | Database | SQLite (shared, local) |
 | Excel export | openpyxl + pandas |
 | Windows notifications | windows-toasts (WinRT) |
@@ -130,35 +130,39 @@ stress_detection/
 │   │
 │   ├── face/
 │   │   ├── face_monitor.py            ← PoC #2 (refactored for shared feed)
-│   │   ├── ear_blink.py               ← EAR + blink detection
-│   │   ├── head_pose.py               ← head pose via solvePnP
-│   │   └── valence_arousal.py         ← HuggingFace VA model
+│   │   └── valence_arousal.py         ← EmoNet-8 VA model (Toisoul et al. 2021)
 │   │
 │   ├── desktop/
-│   │   └── lib/main.dart              ← PoC #3 Flutter app
+│   │   └── lib/main.dart              ← PoC #3 Flutter app (keyword classification)
 │   │
 │   ├── llm/
-│   │   ├── classifier.py              ← Ollama window title classification
+│   │   ├── classifier.py              ← Ollama window title classification (offline)
 │   │   └── recommender.py             ← Ollama recommendation generation
 │   │
 │   ├── fusion/
 │   │   ├── late_fusion.py             ← weighted score combination
-│   │   └── aggregator.py              ← 5-minute window aggregation
+│   │   └── aggregator.py              ← 5-minute aggregation + 6-trigger engine
 │   │
 │   ├── wellbeing/
-│   │   ├── interventions.py           ← trigger logic
 │   │   └── notifier.py                ← Windows desktop notifications
+│   │
+│   ├── ui/
+│   │   └── dashboard.py               ← PyQt6 three-panel dashboard
 │   │
 │   └── utils/
 │       ├── db.py                      ← shared database helpers
 │       ├── config.py                  ← all configuration constants
-│       └── logger.py                  ← structured logging
+│       ├── baseline.py                ← 2-minute resting calibration
+│       └── emotion_labels.py          ← Russell (1980) VA → quadrant label mapping
 │
-└── tests/
+└── tests/                             ← 71 tests
+    ├── conftest.py
     ├── test_ear.py
     ├── test_hrv.py
     ├── test_fusion.py
-    └── test_llm.py
+    ├── test_aggregator.py
+    ├── test_db.py
+    └── test_emotion_labels.py
 ```
 
 ---
