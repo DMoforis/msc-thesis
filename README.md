@@ -466,7 +466,7 @@ CREATE TABLE user_feedback (
 - **Local-first** — all inference (rPPG, MediaPipe, EmoNet-8, Llama 3.1) runs on-device; no network calls after the initial model download
 - **Personal baseline** — stress scoring uses individual resting measurements rather than fixed population thresholds; re-calibration is supported at any time
 - **Graceful degradation** — each modality is independent; if data is unavailable the modality weight drops to zero and remaining weights are renormalised automatically
-- **Modularity** — each module has a single responsibility and is independently testable; 71 automated tests cover the fusion layer, HRV computation, EAR formula, database helpers, and LLM classifier
+- **Modularity** — each module has a single responsibility and is independently testable; 75 automated tests cover the fusion layer, HRV computation, EAR formula, database helpers, and LLM classifier
 
 ---
 

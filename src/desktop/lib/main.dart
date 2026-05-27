@@ -35,6 +35,7 @@
 
 import 'dart:async';
 import 'dart:ffi';
+import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -44,9 +45,17 @@ import 'package:win32/win32.dart';
 // CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Update this path if your Windows username differs from 'dimit'
-const String DB_PATH =
-    r'C:\Users\dimit\Desktop\msc_thesis\stress_detection\data\stress_monitor.db';
+// Derive DB path from working directory (set by run_all.py to project root).
+// Falls back gracefully with a clear error if the directory does not exist.
+String _resolveDbPath() {
+  final cwd = Directory.current.path;
+  final candidate = '$cwd\\data\\stress_monitor.db'
+      .replaceAll('\\', Platform.pathSeparator)
+      .replaceAll('/', Platform.pathSeparator);
+  return candidate;
+}
+
+final String dbPath = _resolveDbPath();
 
 const int WINDOW_SECONDS = 30; // seconds per measurement window
 
@@ -145,7 +154,7 @@ String classifyWindow(String title) {
 Future<Database> initDatabase() async {
   sqfliteFfiInit();
   final db = await databaseFactoryFfi.openDatabase(
-    DB_PATH,
+    dbPath,
     options: OpenDatabaseOptions(
       version: 1,
       onOpen: (db) async {
@@ -164,7 +173,7 @@ Future<Database> initDatabase() async {
       },
     ),
   );
-  print('[DB] desktop_readings table ready → $DB_PATH');
+  print('[DB] desktop_readings table ready → $dbPath');
   return db;
 }
 
@@ -269,6 +278,15 @@ class DesktopMonitor {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Validate that the data/ directory exists before attempting to open the DB.
+  // A missing directory means Flutter was not launched from the project root.
+  final dbDir = Directory(dbPath).parent;
+  if (!dbDir.existsSync()) {
+    print('[Flutter] ERROR: Database directory not found at $dbPath');
+    print('[Flutter] Ensure Flutter is launched from the project root via run_all.py');
+  }
+
   final db = await initDatabase();
   runApp(DesktopMonitorApp(db: db));
 }
@@ -444,7 +462,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
             // ── DB path footer ─────────────────────────────────────────────
             Text(
-              'Saving to: $DB_PATH',
+              'Saving to: $dbPath',
               style: const TextStyle(fontSize: 11, color: Colors.grey),
               overflow: TextOverflow.ellipsis,
             ),
