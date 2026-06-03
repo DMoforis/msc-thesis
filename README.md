@@ -444,6 +444,7 @@ CREATE TABLE user_feedback (
 | Dashboard JPEG warnings | The terminal may show occasional "Corrupt JPEG data: premature end of data segment" warnings from the camera feed widget. These are cosmetic only — the atomic write pattern (`os.replace`) eliminates data corruption; Qt occasionally reads a frame before the file metadata is fully flushed. Data collection is not affected. |
 | Desktop window classification | The Flutter subprocess writes `app_category` using keyword-based rules (Dart cannot call the Python Ollama client at runtime). The Python `src/llm/classifier.py` module is available for offline re-classification of stored window titles but is not invoked during live monitoring. |
 | Pilot study scope | The pilot study is limited to personal computer use due to workplace NDA constraints. Data collected from a single workstation during MSc thesis preparation. |
+| First-launch calibration restart | First-launch calibration requires a dashboard restart after completion due to camera resource conflict between the calibration module and the monitoring backend subprocess. |
 
 ---
 

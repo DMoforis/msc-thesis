@@ -148,6 +148,38 @@ python src\utils\baseline.py --show
 
 ---
 
+## First Launch — Calibration and Initial Start
+
+> **One-time procedure only.** From the second launch onwards, skip straight to Step 6 and run `python dashboard.py --start-backend` directly.
+
+If baseline calibration was not completed in Step 5, the dashboard will guide you through it on first launch. Follow these steps in order:
+
+1. **Launch the dashboard:**
+
+   ```powershell
+   python dashboard.py --start-backend
+   ```
+
+2. A **splash screen** appears asking you to complete a baseline calibration before monitoring begins.
+
+3. Click **"Begin Calibration"** and sit still with your face visible to the camera for the full 2-minute session.
+
+4. When calibration completes, **close the dashboard completely** — click the window's ✕ button or press **Ctrl+C** in the terminal.
+
+5. **Wait 5 seconds** for the camera to release fully.
+
+6. **Re-launch the dashboard:**
+
+   ```powershell
+   python dashboard.py --start-backend
+   ```
+
+7. The system starts normally with your personal baseline active. The splash screen will not appear again.
+
+> **Why the restart?** The calibration module and the monitoring backend subprocess both require exclusive camera access. Closing and restarting the dashboard ensures the camera held by the calibration session is released before the backend subprocess acquires it.
+
+---
+
 ## Step 6 — Launch the system
 
 ### Terminal 1 — Ollama (keep running throughout the session)
