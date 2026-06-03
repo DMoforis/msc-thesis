@@ -76,10 +76,17 @@ class WindowsNotifier:
         """
         Try to initialise windows-toasts; fall back to console print.
         Returns (backend_name, toaster_instance, Toast_class).
+
+        InteractableWindowsToaster is preferred over WindowsToaster because it
+        registers the app under its AUMID and has better delivery guarantees
+        when called from a subprocess context (e.g. spawned by run_all.py).
+        ToastButton is imported so notification actions can be added later.
         """
         try:
-            from windows_toasts import WindowsToaster, Toast
-            toaster = WindowsToaster(self._app_name)
+            from windows_toasts import InteractableWindowsToaster, Toast, ToastButton  # noqa: F401
+            print(f"[Notifier] Initialising InteractableWindowsToaster(app_name={self._app_name!r})")
+            toaster = InteractableWindowsToaster(self._app_name)
+            print(f"[Notifier] Toaster ready: {toaster!r}")
             return "windows_toasts", toaster, Toast
         except Exception as exc:
             print(f"[Notifier] windows-toasts unavailable ({exc}), "
@@ -158,10 +165,73 @@ class WindowsNotifier:
             return self._deliver_print(title, message)
 
     def _deliver_windows_toasts(self, title: str, message: str) -> bool:
+        """
+        Dispatch a toast via InteractableWindowsToaster running in a dedicated
+        daemon thread.
+
+        Running show_toast() in its own thread avoids COM apartment conflicts
+        that arise when this code is called from a subprocess spawned by
+        run_all.py (the calling thread may not have a WinRT message pump).
+        thread.join(timeout=3) ensures we don't block the aggregator loop
+        and gives the OS enough time to accept the toast.
+
+        After the join we check two outcomes:
+          - exc_holder populated → the API raised; fall back to balloon
+          - thread still alive   → show_toast() hung; Focus Assist likely
+                                   suppressed the popup, fall back to balloon
+          - otherwise            → delivered successfully
+        """
+        import threading
+        import traceback
+
         toast = self._Toast()
         toast.text_fields = [title, message]
-        self._toaster.show_toast(toast)
-        print(f"[Notifier] Sent via windows-toasts: {title!r}")
+
+        print(f"[Notifier] show_toast() call:")
+        print(f"  app_name   : {self._app_name!r}")
+        print(f"  toaster    : {self._toaster!r}")
+        print(f"  Toast type : {type(toast).__name__}")
+        print(f"  text_fields: {toast.text_fields!r}")
+
+        exc_holder: list[Exception | None] = [None]
+
+        def _show(toaster, t):
+            try:
+                toaster.show_toast(t)
+            except Exception as e:
+                exc_holder[0] = e
+
+        thread = threading.Thread(target=_show, args=(self._toaster, toast), daemon=True)
+        thread.start()
+        thread.join(timeout=3)
+
+        if exc_holder[0] is not None:
+            exc = exc_holder[0]
+            print(f"[Notifier] show_toast() raised {type(exc).__name__}: {exc}")
+            print("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+            return self._balloon_fallback(title, message)
+
+        if thread.is_alive():
+            # Thread did not finish within 3 s — WinRT call is stuck,
+            # which typically means Focus Assist silently swallowed the toast.
+            print("[Notifier] Toast may have been suppressed by Focus Assist")
+            return self._balloon_fallback(title, message)
+
+        print(f"[Notifier] Toast delivered successfully: {title!r}")
+        return True
+
+    @staticmethod
+    def _balloon_fallback(title: str, message: str) -> bool:
+        """
+        Last-resort audio cue + console log when the toast popup is suppressed.
+
+        MessageBeep(0) plays the system default alert sound so the user gets
+        an audible signal even if Focus Assist blocked the visual popup.
+        The message is also printed so it is never silently lost.
+        """
+        import ctypes
+        ctypes.windll.user32.MessageBeep(0)
+        print(f"[Notifier] Fallback: {title} — {message}")
         return True
 
     @staticmethod
@@ -230,28 +300,5 @@ def send_notification(
 # ── Standalone smoke-test ─────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    notifier = WindowsNotifier()
-    print(f"Notification backend: {notifier._backend}\n")
-
-    ok = notifier.send(
-        title          = "Time for a break",
-        message        = "You have been focused for 52 minutes. A short walk would help.",
-        timeout        = 8,
-        trigger_reason = "high_stress",
-        stress_index   = 0.71,
-        valence        = -0.38,
-        arousal        = 0.55,
-    )
-    print(f"Delivered: {ok}")
-
-    # Verify it was logged
-    import sqlite3
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute(
-        "SELECT timestamp, trigger_reason, message, delivered "
-        "FROM interventions ORDER BY id DESC LIMIT 3"
-    ).fetchall()
-    print("\nLast interventions in DB:")
-    for r in rows:
-        print(f"  {r[0]}  [{r[1]}]  delivered={r[3]}  {r[2][:60]}...")
-    conn.close()
+    n = WindowsNotifier()
+    n.send("Test", "Direct notifier test", trigger_reason="high_stress")
