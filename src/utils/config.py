@@ -67,7 +67,7 @@ BASELINE_DURATION_SECONDS = 120   # 2-minute resting calibration session
 
 # ── Diagnostics ───────────────────────────────────────────────────────────────
 # Set True to print per-window aggregation detail (desktop sample rows, row
-# counts) to the terminal.  Keep False during pilot sessions to reduce noise.
+# counts) to the terminal.  Keep False during normal use to reduce noise.
 AGGREGATOR_VERBOSE = False
 
 # ── Face landmark detection ───────────────────────────────────────────────────

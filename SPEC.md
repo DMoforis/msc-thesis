@@ -187,7 +187,7 @@ Generate a recommendation:
 **File:** `src/fusion/aggregator.py`
 
 **Purpose:** Compute 5-minute summary windows across all modalities.
-This is the primary unit of analysis for the pilot study and thesis evaluation.
+This is the primary unit of analysis for thesis evaluation.
 
 **Logic:**
 - Runs as a background thread, triggers every 5 minutes
@@ -417,14 +417,14 @@ pip freeze > requirements.txt
 
 ---
 
-## Evaluation methodology (pilot study)
+## Evaluation methodology
 
-- Participants: 10-20 knowledge workers
-- Duration: 1-2 weeks per participant
-- Baseline collection: first 2-3 days (personalised thresholds)
-- Measures: self-reported stress (Likert 1-5), intervention usefulness rating
-- Analysis: descriptive statistics + correlation matrix (exported to Excel)
-- Primary metric: stress_index accuracy vs self-reported ground truth
+The system is evaluated as a proof-of-concept through:
+
+- **Automated tests**: 75 unit and integration tests covering fusion logic, HRV validation, classifier accuracy, and aggregator behaviour (see `tests/`)
+- **Functional demonstration**: end-to-end operation of all three modalities (rPPG, facial cues, desktop context) on a single workstation under realistic working conditions
+- **Data quality monitoring**: `data_health_check()` in `src/utils/db.py` reports row counts, signal quality, and per-modality coverage across a session
+- **Baseline personalisation**: single-user resting calibration validated against live session data via the `aggregated_windows` table
 
 ---
 

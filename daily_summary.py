@@ -1,7 +1,7 @@
 """
 daily_summary.py
 ----------------
-Human-readable daily monitoring summary for pilot study participants.
+Human-readable daily monitoring summary.
 
 Usage:
   python daily_summary.py                      # today
@@ -434,7 +434,7 @@ def print_interventions(out: _Out, data: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Daily monitoring summary for pilot study participants."
+        description="Daily monitoring summary."
     )
     parser.add_argument(
         "--date",

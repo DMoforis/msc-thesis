@@ -195,7 +195,7 @@ class Aggregator:
 
             # Per-window diagnostic output — gated by AGGREGATOR_VERBOSE in config.py.
             # Set AGGREGATOR_VERBOSE = True when debugging desktop data ingestion;
-            # leave False during pilot sessions to keep the terminal clean.
+            # leave False during normal use to keep the terminal clean.
             if AGGREGATOR_VERBOSE:
                 print(f"[Aggregator] window {window_start:%H:%M}-{window_end:%H:%M} | "
                       f"physio={len(physio_rows)} face={len(face_rows)} desktop={len(desktop_rows)}")

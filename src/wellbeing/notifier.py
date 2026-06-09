@@ -9,8 +9,8 @@ Library: windows-toasts (pip install windows-toasts)
   Falls back to console print if windows-toasts is unavailable.
 
 Every notification sent is persisted to the interventions table so the
-pilot study can analyse what was shown, when, and how effective it was
-(correlated with user_feedback ratings).
+session history can be reviewed and future feedback mechanisms can be
+built on top of it (the user_feedback table is reserved for this).
 
 Usage
 -----

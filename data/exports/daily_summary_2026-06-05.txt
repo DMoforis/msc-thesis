@@ -1,0 +1,45 @@
+
+ =================================================================
+  DAILY MONITORING SUMMARY  |  2026-06-05
+ =================================================================
+
+  SESSION OVERVIEW
+  ---------------------------------------------------------------
+  Monitoring time       : 15 min  (00:03 to 00:18)
+  5-min windows         : 3
+  Interventions         : 0
+
+  STRESS SUMMARY
+  ---------------------------------------------------------------
+  Average index         : 0.147  [ Low ]
+  Peak stress           : 00:13  |  Document                  (index: 0.174)
+  Most relaxed          : 00:03  |  Other                     (index: 0.111)
+
+  PHYSIOLOGICAL
+  ---------------------------------------------------------------
+  Average heart rate    : 68.4 BPM
+  Signal quality        : 0.32 / 1.00  [ Poor — results less reliable ]
+  RMSSD                 : -- (0 / 4 windows had sufficient signal)
+
+  EMOTIONAL STATE
+  ---------------------------------------------------------------
+  Valence               : -0.174  [ Neutral ]
+  Arousal               : +0.311  [ High ]
+  Primary emotion       : Neutral  (moderate intensity)
+  Predominant state     : Alert / activated
+
+  DESKTOP ACTIVITY
+  ---------------------------------------------------------------
+  Main activity         : Document  (67% of session)
+  Activity level        : 87%
+  Window switches       : 101 total
+  Longest idle period   : 30 sec
+
+  INTERVENTIONS  (0 triggered)
+  ---------------------------------------------------------------
+  No interventions triggered - good session!
+
+ =================================================================
+  Generated 2026-06-05 00:24:32
+ =================================================================
+

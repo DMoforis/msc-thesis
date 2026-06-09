@@ -182,7 +182,7 @@ def data_health_check(db_path: str = DB_PATH) -> None:
 
     Covers row counts, signal quality, RMSSD plausibility, desktop timestamp
     format distribution, and aggregated-window modality coverage.
-    Useful for thesis documentation and pilot study monitoring.
+    Useful for thesis documentation and system diagnostics.
 
     Usage
     -----
