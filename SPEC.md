@@ -409,11 +409,7 @@ pip freeze > requirements.txt
 
 ## Research questions (from thesis proposal)
 
-1. Can combining HRV, facial cues and desktop context improve cognitive load
-   detection accuracy vs single-modality approaches?
-2. To what degree are the proposed micro-interventions considered useful and
-   acceptable by users?
-3. How does the use of webcam and OCR affect user acceptance of the system?
+The original proposal included user-acceptance-oriented research questions. In the final thesis scope, the evaluation was reframed as a technical and functional proof-of-concept assessment. User acceptance, perceived privacy and intervention usefulness are therefore treated as limitations and future work.
 
 ---
 
