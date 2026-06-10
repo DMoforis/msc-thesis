@@ -27,8 +27,8 @@ Install the following tools before beginning. All are free.
 Open **PowerShell** and run:
 
 ```powershell
-git clone https://github.com/DMoforis/msc-thesis.git
-cd msc-thesis
+git clone https://github.com/DMoforis/multimodal-info-system-stress-detection.git
+cd multimodal-info-system-stress-detection
 ```
 
 > If you received the project as a ZIP archive instead, extract it and `cd` into the extracted folder.

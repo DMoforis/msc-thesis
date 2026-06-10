@@ -134,7 +134,7 @@ Key Python packages (installed via `requirements.txt`):
 | `mediapipe` | Real-time face landmark detection (468 points) |
 | `torch`, `torchvision` | EmoNet-8 valence-arousal inference |
 | `ollama` | Local LLM client (Llama 3.1 8B) |
-| `neurokit2` | HRV signal processing and RMSSD computation |
+| `heartpy` | HRV signal processing and RMSSD computation (via open-rppg pipeline) |
 | `opencv-python` | Camera capture and frame annotation |
 | `PyQt6`, `pyqtgraph` | Dashboard UI and real-time trend plots |
 | `pandas`, `openpyxl` | Excel export |
@@ -242,7 +242,7 @@ The aggregator evaluates six independent trigger conditions after each 5-minute 
 |---------|-----------|----------|
 | `high_stress` | `stress_index` > 0.65 for 2 consecutive windows | 15 min |
 | `disengagement` | Low activity % + high idle time for 2 consecutive windows | 15 min |
-| `negative_affect` | Mean valence < −0.40 for 2 consecutive windows | 15 min |
+| `negative_affect` | Mean valence < −0.35 for 2 consecutive windows | 15 min |
 | `eye_strain` | EAR consistently below resting baseline for 2 consecutive windows | 15 min |
 | `prolonged_idle` | Continuously idle for 3 consecutive windows | 15 min |
 | `positive_flow` | High activity + positive valence (positive reinforcement) | 30 min, once per session |
@@ -586,8 +586,6 @@ The original `run_all.py` integration test confirming all three modalities — p
 3. **Makowski et al. (2021)** — NeuroKit2: a Python toolbox for neurophysiological signal processing. *Behavior Research Methods, 53*, 1689–1178.
 4. **Toisoul et al. (2021)** — Estimation of continuous valence and arousal levels from faces in naturalistic conditions. *Nature Machine Intelligence, 3*, 42–50.
 5. **Russell (1980)** — A circumplex model of affect. *Journal of Personality and Social Psychology, 39*(6), 1161–1178.
-6. **Bruin et al. (2024)** — Detection of arousal and valence from facial expressions and physiological responses evoked by different types of stressors. *Frontiers in Neuroergonomics, 5.* https://doi.org/10.3389/fnrgo.2024.1338243
-7. **Awada et al. (2024)** — Stress detection using valence and arousal dimensions. *IEEE Transactions on Affective Computing, 15*(3).
 
 ---
 
