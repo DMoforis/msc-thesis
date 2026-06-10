@@ -33,3 +33,4 @@ data/latest_frame.tmp.jpg
 # OS
 .DS_Store
 Thumbs.db
+data/exports/
