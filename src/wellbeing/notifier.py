@@ -68,30 +68,28 @@ class WindowsNotifier:
         self._app_name = app_name
         self._db_path  = db_path
         self._last_sent: datetime | None = None
-        self._backend, self._toaster, self._Toast = self._init_backend()
+        self._backend = self._init_backend()
 
     # ── Initialisation ────────────────────────────────────────────────────────
 
-    def _init_backend(self) -> tuple[str, object | None, type | None]:
+    def _init_backend(self) -> str:
         """
-        Try to initialise windows-toasts; fall back to console print.
-        Returns (backend_name, toaster_instance, Toast_class).
+        Check whether windows-toasts is importable; return backend name.
 
-        InteractableWindowsToaster is preferred over WindowsToaster because it
-        registers the app under its AUMID and has better delivery guarantees
-        when called from a subprocess context (e.g. spawned by run_all.py).
-        ToastButton is imported so notification actions can be added later.
+        The toaster object is NOT created here — COM objects must be created
+        on the same thread that will use them (COM STA rules).  A fresh
+        InteractableWindowsToaster is created inside the delivery thread each
+        time a toast is sent.
         """
         try:
-            from windows_toasts import InteractableWindowsToaster, Toast, ToastButton  # noqa: F401
-            print(f"[Notifier] Initialising InteractableWindowsToaster(app_name={self._app_name!r})")
-            toaster = InteractableWindowsToaster(self._app_name)
-            print(f"[Notifier] Toaster ready: {toaster!r}")
-            return "windows_toasts", toaster, Toast
+            from windows_toasts import InteractableWindowsToaster, Toast  # noqa: F401
+            print(f"[Notifier] windows-toasts available; toaster will be "
+                  "created per-thread (COM STA requirement).")
+            return "windows_toasts"
         except Exception as exc:
             print(f"[Notifier] windows-toasts unavailable ({exc}), "
                   "using console fallback.")
-            return "print", None, None
+            return "print"
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -166,44 +164,44 @@ class WindowsNotifier:
 
     def _deliver_windows_toasts(self, title: str, message: str) -> bool:
         """
-        Dispatch a toast via InteractableWindowsToaster running in a dedicated
-        daemon thread.
+        Deliver a toast in a dedicated daemon thread.
 
-        Running show_toast() in its own thread avoids COM apartment conflicts
-        that arise when this code is called from a subprocess spawned by
-        run_all.py (the calling thread may not have a WinRT message pump).
-        thread.join(timeout=3) ensures we don't block the aggregator loop
-        and gives the OS enough time to accept the toast.
+        The toaster object is created INSIDE the thread after CoInitialize()
+        so it lives in its own COM STA.  Passing a COM object across thread
+        boundaries causes the -2147417842 marshalling error, so we pass only
+        plain strings and let the thread own the full COM lifecycle.
 
-        After the join we check two outcomes:
-          - exc_holder populated → the API raised; fall back to balloon
-          - thread still alive   → show_toast() hung; Focus Assist likely
-                                   suppressed the popup, fall back to balloon
-          - otherwise            → delivered successfully
+        thread.join(timeout=5) gives the OS enough time to accept the toast
+        without blocking the aggregator loop indefinitely.
         """
         import threading
         import traceback
+        import pythoncom
+        from windows_toasts import InteractableWindowsToaster, Toast
 
-        toast = self._Toast()
-        toast.text_fields = [title, message]
-
-        print(f"[Notifier] show_toast() call:")
-        print(f"  app_name   : {self._app_name!r}")
-        print(f"  toaster    : {self._toaster!r}")
-        print(f"  Toast type : {type(toast).__name__}")
-        print(f"  text_fields: {toast.text_fields!r}")
+        print(f"[Notifier] Dispatching toast: {title!r}")
 
         exc_holder: list[Exception | None] = [None]
 
-        def _show(toaster, t):
+        def _show(app_name: str, ttl: str, msg: str) -> None:
+            pythoncom.CoInitialize()
             try:
-                toaster.show_toast(t)
+                toaster = InteractableWindowsToaster(app_name)
+                toast = Toast()
+                toast.text_fields = [ttl, msg]
+                toaster.show_toast(toast)
             except Exception as e:
                 exc_holder[0] = e
+            finally:
+                pythoncom.CoUninitialize()
 
-        thread = threading.Thread(target=_show, args=(self._toaster, toast), daemon=True)
+        thread = threading.Thread(
+            target=_show,
+            args=(self._app_name, title, message),
+            daemon=True,
+        )
         thread.start()
-        thread.join(timeout=3)
+        thread.join(timeout=5)
 
         if exc_holder[0] is not None:
             exc = exc_holder[0]
@@ -212,8 +210,6 @@ class WindowsNotifier:
             return self._balloon_fallback(title, message)
 
         if thread.is_alive():
-            # Thread did not finish within 3 s — WinRT call is stuck,
-            # which typically means Focus Assist silently swallowed the toast.
             print("[Notifier] Toast may have been suppressed by Focus Assist")
             return self._balloon_fallback(title, message)
 

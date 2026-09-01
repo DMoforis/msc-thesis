@@ -1772,8 +1772,10 @@ class DashboardWindow(QMainWindow):
             pg.setConfigOption("foreground", c("sub"))
 
         self.setWindowTitle("Stress Monitor — Well-being Dashboard")
-        self.setMinimumSize(1100, 700)
-        self.resize(1300, 760)
+        self.setMinimumSize(1280, 820)
+        w = self._settings.value("window/width",  1400, type=int)
+        h = self._settings.value("window/height", 880,  type=int)
+        self.resize(w, h)
         self.setStyleSheet(_stylesheet())
 
         # ── Build three-panel layout ──────────────────────────────────────
@@ -1912,6 +1914,8 @@ class DashboardWindow(QMainWindow):
         cam = self._left.camera_widget
         if cam is not None:
             cam.stop_capture()
+        self._settings.setValue("window/width",  self.width())
+        self._settings.setValue("window/height", self.height())
         if self._conn:
             try:
                 self._conn.close()
