@@ -123,6 +123,29 @@ def ensure_interventions_table(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def ensure_llm_comparisons_table(conn: sqlite3.Connection) -> None:
+    """Create the llm_comparisons table if it does not already exist.
+
+    Each row records side-by-side outputs from the primary and secondary LLMs
+    for the same trigger context, enabling thesis evaluation of response quality
+    and latency between models.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS llm_comparisons (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp         TEXT NOT NULL,
+            trigger_reason    TEXT,
+            context_json      TEXT,
+            llama_response    TEXT,
+            qwen_response     TEXT,
+            llama_latency_ms  REAL,
+            qwen_latency_ms   REAL,
+            stress_index      REAL
+        )
+    """)
+    conn.commit()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # WINDOW FETCH HELPERS
 # ─────────────────────────────────────────────────────────────────────────────

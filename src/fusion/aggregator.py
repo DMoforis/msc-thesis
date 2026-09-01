@@ -438,9 +438,24 @@ class Aggregator:
             session_min = int(
                 (datetime.now() - self._session_start).total_seconds() / 60
             )
+            # Fetch the most recent desktop window title for LLM context.
+            active_window = "Unknown"
+            try:
+                _dconn = open_db(self._db_path)
+                _row = _dconn.execute(
+                    "SELECT active_window FROM desktop_readings "
+                    "ORDER BY timestamp DESC LIMIT 1"
+                ).fetchone()
+                if _row and _row[0]:
+                    active_window = _row[0]
+                _dconn.close()
+            except Exception:
+                pass   # DB unavailable — fall through to "Unknown"
+
             context = {
                 "trigger_reason":      trigger_reason,
                 "app_category":        desktop_agg.get("dominant_category") or "Unknown",
+                "active_window":       active_window,
                 "stress_index":        stress_index,
                 "valence":             face_agg.get("avg_valence"),
                 "arousal":             face_agg.get("avg_arousal"),

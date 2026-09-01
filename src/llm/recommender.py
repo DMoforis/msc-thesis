@@ -6,16 +6,19 @@ MSc Thesis — Dimitris Moforis, University of Piraeus, Dept. of Digital Systems
 
 Design
 ------
-  Primary:  Ollama (Llama 3.1 8B) — single-shot prompt engineered for
-            a short, friendly, context-aware recommendation.
-            2-second timeout (same as classifier).
-  Fallback: Template-based messages selected by trigger type.
-            Activates when Ollama is not running or exceeds the timeout.
+  Primary:   Ollama (Llama 3.1 8B) — single-shot prompt engineered for
+             a short, friendly, context-aware recommendation.
+             2-second timeout; falls back to template if exceeded.
+  Secondary: Ollama (Qwen 3.5 4B) — runs in parallel when
+             LLM_COMPARISON_MODE = True; result stored for thesis
+             evaluation only and never delays the notification.
+  Fallback:  Template-based messages selected by trigger type.
+             Activates when Ollama is not running or exceeds the timeout.
 
 Output
 ------
   Always a non-empty string ≤ 200 characters suitable for a Windows
-  desktop notification.
+  desktop notification (driven by the primary model).
 
 Usage
 -----
@@ -41,7 +44,15 @@ _ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from src.utils.config import OLLAMA_MODEL, OLLAMA_TIMEOUT
+from src.utils.config import (
+    OLLAMA_MODEL,
+    OLLAMA_MODEL_PRIMARY,
+    OLLAMA_MODEL_SECONDARY,
+    OLLAMA_TIMEOUT,
+    OLLAMA_SECONDARY_TIMEOUT,
+    LLM_COMPARISON_MODE,
+    DB_PATH,
+)
 
 # ── Template fallbacks, keyed by trigger type ─────────────────────────────────
 # Chosen to be specific and actionable, not generic.
@@ -100,8 +111,13 @@ class WellbeingRecommender:
     """
     Generates contextual well-being recommendations.
 
-    Primary path:  Ollama (Llama 3.1 8B) with 2-second timeout.
-    Fallback path: Rotating template messages.
+    Primary path:   Ollama (Llama 3.1 8B) with 2-second timeout.
+    Comparison path: When LLM_COMPARISON_MODE is True, Qwen 3.5 4B runs in
+                    parallel in a background thread; the primary result is
+                    returned immediately so the notification is never delayed.
+                    Both responses are saved to llm_comparisons for thesis
+                    evaluation after both models have finished.
+    Fallback path:  Rotating template messages when Ollama is unavailable.
 
     The same _ollama_ok probe strategy as WindowClassifier is used:
       - None  = not yet probed
@@ -113,12 +129,20 @@ class WellbeingRecommender:
         self,
         model:   str   = OLLAMA_MODEL,
         timeout: float = OLLAMA_TIMEOUT,
+        db_path: str   = DB_PATH,
     ):
         self._model    = model
         self._timeout  = timeout
+        self._db_path  = db_path
         self._ollama_ok: bool | None = None
+        # Primary executor — used for the notification-driving LLM call.
         self._executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="ollama-rec"
+            max_workers=1, thread_name_prefix="ollama-rec-primary"
+        )
+        # Secondary executor — used only in comparison mode; never blocks
+        # the notification because its result is collected in a daemon thread.
+        self._executor_secondary = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="ollama-rec-secondary"
         )
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -126,6 +150,10 @@ class WellbeingRecommender:
     def generate(self, context: dict) -> str:
         """
         Return a well-being recommendation string (≤ 200 characters).
+
+        When LLM_COMPARISON_MODE is True, both models are invoked in parallel.
+        The primary model (Llama) drives the returned message; the secondary
+        model (Qwen) result is persisted asynchronously to llm_comparisons.
 
         Parameters
         ----------
@@ -142,15 +170,19 @@ class WellbeingRecommender:
         trigger = _infer_trigger(context)
 
         if self._should_try_ollama():
-            msg = self._generate_ollama(context)
+            if LLM_COMPARISON_MODE:
+                msg = self._generate_with_comparison(context)
+            else:
+                msg = self._generate_ollama(context)
             if msg:
                 return msg[:200]
 
         return _template_message(trigger)
 
     def close(self) -> None:
-        """Shut down the thread pool cleanly."""
+        """Shut down both thread pools cleanly."""
         self._executor.shutdown(wait=False)
+        self._executor_secondary.shutdown(wait=False)
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -167,12 +199,12 @@ class WellbeingRecommender:
         return self._ollama_ok
 
     def _generate_ollama(self, context: dict) -> str | None:
-        """Call Ollama with a timeout. Return None on failure."""
+        """Call the primary model with a timeout. Return None on failure."""
         prompt = _build_prompt(context)
         try:
-            future   = self._executor.submit(self._ollama_call, prompt)
-            response = future.result(timeout=self._timeout)
-            return _clean_response(response)
+            future   = self._executor.submit(self._timed_ollama_call, OLLAMA_MODEL_PRIMARY, prompt)
+            raw, _   = future.result(timeout=self._timeout)
+            return _clean_response(raw)
 
         except concurrent.futures.TimeoutError:
             return None
@@ -182,17 +214,141 @@ class WellbeingRecommender:
             self._ollama_ok = False
             return None
 
-    def _ollama_call(self, prompt: str) -> str:
-        """Blocking Ollama call — runs in thread pool."""
-        import ollama
-        response = ollama.generate(
-            model   = self._model,
-            prompt  = prompt,
-            options = {"num_predict": 80, "temperature": 0.7},
+    def _generate_with_comparison(self, context: dict) -> str | None:
+        """
+        Run both LLMs in parallel; return the primary response immediately.
+
+        The secondary model (Qwen) result is collected in a daemon background
+        thread and written to the llm_comparisons table after it finishes.
+        The notification is never delayed waiting for Qwen.
+        """
+        import threading
+
+        # Both models receive the same prompt. Thinking suppression for Qwen 3.5
+        # is applied at the API level inside _timed_ollama_call (think=False option),
+        # not via a text suffix which proved unreliable.
+        prompt = _build_prompt(context)
+
+        # Submit secondary first so both start as close together as possible.
+        f_qwen  = self._executor_secondary.submit(
+            self._timed_ollama_call, OLLAMA_MODEL_SECONDARY, prompt
         )
-        if isinstance(response, dict):
-            return response.get("response", "")
-        return getattr(response, "response", "")
+        f_llama = self._executor.submit(
+            self._timed_ollama_call, OLLAMA_MODEL_PRIMARY, prompt
+        )
+
+        # Collect primary result (this is the notification-critical path).
+        llama_text, llama_ms = None, None
+        try:
+            raw_llama, llama_ms = f_llama.result(timeout=self._timeout)
+            llama_text = _clean_response(raw_llama)
+        except concurrent.futures.TimeoutError:
+            llama_ms = round(self._timeout * 1000, 1)
+        except Exception as exc:
+            print(f"[Recommender] Primary model error: {exc}. Falling back to template.")
+            self._ollama_ok = False
+
+        # Collect secondary result + save comparison in a daemon thread so the
+        # notification is dispatched without waiting for Qwen.
+        def _collect_and_save() -> None:
+            qwen_text, qwen_ms = None, None
+            try:
+                raw_qwen, qwen_ms = f_qwen.result(timeout=OLLAMA_SECONDARY_TIMEOUT)
+                qwen_text = _clean_response(raw_qwen)
+            except concurrent.futures.TimeoutError:
+                qwen_ms = round(OLLAMA_SECONDARY_TIMEOUT * 1000, 1)
+                print(f"[Recommender] Secondary model timed out after {qwen_ms:.0f} ms")
+            except Exception as exc:
+                print(f"[Recommender] Secondary model ({OLLAMA_MODEL_SECONDARY}) error: {exc}")
+
+            print(
+                f"[Recommender] Llama response: "
+                f"{llama_text[:50] if llama_text else 'None'}"
+            )
+            print(
+                f"[Recommender] Qwen response: "
+                f"{qwen_text[:50] if qwen_text else 'None'}"
+            )
+            try:
+                _save_comparison_row(
+                    self._db_path, context,
+                    llama_text, qwen_text,
+                    llama_ms,   qwen_ms,
+                )
+            except Exception as exc:
+                print(f"[Recommender] Comparison DB save error: {exc}")
+
+        threading.Thread(target=_collect_and_save, daemon=True).start()
+
+        return llama_text
+
+    def _timed_ollama_call(
+        self,
+        model:        str,
+        prompt:       str,
+        use_thinking: bool = True,
+    ) -> tuple[str, float]:
+        """Blocking Ollama call with wall-clock timing.
+
+        For Qwen 3.5, the chat endpoint is used with ``think=False`` to
+        suppress chain-of-thought reasoning at the API level.  For all other
+        models the generate endpoint is used without the think option, which
+        Llama 3.1 does not support.
+
+        Parameters
+        ----------
+        model        : Ollama model identifier
+        prompt       : complete prompt string
+        use_thinking : explicit override — False forces think suppression even
+                       on non-Qwen models (default True)
+
+        Returns
+        -------
+        tuple of (response_text, latency_ms)
+        """
+        import time
+        import ollama
+
+        # Qwen 3.5 exposes chain-of-thought control via the API option;
+        # the /no_think text suffix does not reliably suppress it.
+        suppress_thinking = ("qwen3.5" in model.lower()) or not use_thinking
+
+        start = time.monotonic()
+
+        if suppress_thinking:
+            response = ollama.chat(
+                model    = model,
+                messages = [{"role": "user", "content": prompt}],
+                options  = {"think": False, "num_predict": 80, "temperature": 0.7},
+            )
+            latency_ms = round((time.monotonic() - start) * 1000, 1)
+            if isinstance(response, dict):
+                text = response.get("message", {}).get("content", "") or ""
+            else:
+                msg  = getattr(response, "message", None)
+                text = (msg.content if msg and hasattr(msg, "content") else "") or ""
+        else:
+            response = ollama.generate(
+                model   = model,
+                prompt  = prompt,
+                options = {"num_predict": 80, "temperature": 0.7},
+            )
+            latency_ms = round((time.monotonic() - start) * 1000, 1)
+            if isinstance(response, dict):
+                text = response.get("response", "") or ""
+            else:
+                text = getattr(response, "response", "") or ""
+
+        print(
+            f"[Recommender] {model} raw text "
+            f"({latency_ms:.0f} ms): {repr(text[:80]) if text else 'EMPTY'}"
+        )
+        return text, latency_ms
+
+    def _ollama_call(self, prompt: str) -> str:
+        """Blocking Ollama call — kept for backwards compatibility."""
+        raw, _ = self._timed_ollama_call(self._model, prompt)
+        return raw
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -200,6 +356,17 @@ class WellbeingRecommender:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_prompt(ctx: dict) -> str:
+    """Build the Ollama prompt for the given context.
+
+    The same prompt is used for all models. Thinking suppression for models
+    that support it (e.g. Qwen 3.5) is handled at the API level via
+    ``options={"think": False}`` inside ``_timed_ollama_call``, not via a
+    text suffix which proved unreliable in practice.
+
+    Parameters
+    ----------
+    ctx : dict — recommendation context (see WellbeingRecommender.generate)
+    """
     stress   = ctx.get("stress_index", 0.0) or 0.0
     valence  = ctx.get("valence")
     arousal  = ctx.get("arousal")
@@ -239,13 +406,47 @@ def _build_prompt(ctx: dict) -> str:
     )
 
 
+def _strip_thinking_artifacts(text: str) -> str:
+    """Remove chain-of-thought reasoning artifacts from a model response.
+
+    Acts as a safety net in case ``options={"think": False}`` is not fully
+    honoured by the installed Ollama version or model variant.
+
+    Strips
+    ------
+    - Any ``<think>…</think>`` block, including the tags themselves
+    - Lines that begin with "Thinking..." or "Thinking Process:"
+    - Leading/trailing whitespace after removal
+    """
+    import re
+
+    # Remove <think>…</think> blocks (multiline, non-greedy).
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+
+    # Drop entire lines whose content is a thinking prefix.
+    lines = text.splitlines()
+    filtered = [
+        line for line in lines
+        if not re.match(r"^\s*(Thinking\.{0,3}|Thinking Process:)", line, re.IGNORECASE)
+    ]
+
+    return "\n".join(filtered).strip()
+
+
 def _clean_response(raw: str) -> str | None:
-    """Strip leading/trailing whitespace and unwanted prefixes."""
-    text = raw.strip()
-    # Remove common prefixes the LLM sometimes adds
+    """Strip thinking artifacts, whitespace, and unwanted prefixes.
+
+    Returns None when the cleaned text is shorter than 10 characters
+    (indicates the model produced an empty or degenerate response).
+    """
+    # First remove any reasoning/thinking blocks the model may have emitted.
+    text = _strip_thinking_artifacts(raw)
+
+    # Remove common LLM-generated prefixes.
     for prefix in ("Recommendation:", "Here's a recommendation:", "Sure!"):
         if text.lower().startswith(prefix.lower()):
             text = text[len(prefix):].strip()
+
     if len(text) < 10:
         return None
     return text[:200]
@@ -279,6 +480,58 @@ def _infer_trigger(ctx: dict) -> str:
     if stress >= 0.65:
         return "high_stress"
     return "default"
+
+
+def _save_comparison_row(
+    db_path:    str,
+    context:    dict,
+    llama_text: str | None,
+    qwen_text:  str | None,
+    llama_ms:   float | None,
+    qwen_ms:    float | None,
+) -> None:
+    """Persist one LLM comparison row to the database.
+
+    Called from a daemon background thread so it never blocks the notification.
+    The llm_comparisons table is created on first write if it does not yet exist.
+    """
+    import json
+    from datetime import datetime
+    from src.utils.db import open_db, ensure_llm_comparisons_table
+
+    conn = open_db(db_path)
+    ensure_llm_comparisons_table(conn)
+
+    # Serialise a small, analysis-relevant subset of the context.
+    ctx_small = {k: context.get(k) for k in (
+        "app_category", "active_window", "trigger_reason",
+        "stress_index", "valence", "arousal",
+    )}
+    conn.execute(
+        """
+        INSERT INTO llm_comparisons
+            (timestamp, trigger_reason, context_json,
+             llama_response, qwen_response,
+             llama_latency_ms, qwen_latency_ms, stress_index)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            context.get("trigger_reason"),
+            json.dumps(ctx_small),
+            llama_text,
+            qwen_text,
+            llama_ms,
+            qwen_ms,
+            context.get("stress_index"),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    print(
+        f"[Recommender] Comparison saved — "
+        f"llama={llama_ms} ms, qwen={qwen_ms} ms"
+    )
 
 
 def _template_message(trigger: str) -> str:

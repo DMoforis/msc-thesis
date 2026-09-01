@@ -6,13 +6,14 @@ MSc Thesis — Dimitris Moforis, University of Piraeus, Dept. of Digital Systems
 
 Sheets produced
 ---------------
-  Raw Physio     — all physio_readings rows (HR + HRV metrics)
-  Raw Face       — all face_readings rows (EAR, blink rate, head pose, VA)
-  Raw Desktop    — all desktop_readings rows (app category, idle, activity)
-  5-Min Windows  — aggregated_windows (primary thesis analysis sheet)
-  Interventions  — all recommendations shown + delivery status
-  Correlations   — Pearson correlation matrix of key numeric variables
-  Summary Stats  — per-column descriptive statistics (mean, std, min, max, …)
+  Raw Physio      — all physio_readings rows (HR + HRV metrics)
+  Raw Face        — all face_readings rows (EAR, blink rate, head pose, VA)
+  Raw Desktop     — all desktop_readings rows (app category, idle, activity)
+  5-Min Windows   — aggregated_windows (primary thesis analysis sheet)
+  Interventions   — all recommendations shown + delivery status
+  LLM Comparison  — side-by-side Llama vs Qwen responses for thesis evaluation
+  Correlations    — Pearson correlation matrix of key numeric variables
+  Summary Stats   — per-column descriptive statistics (mean, std, min, max, …)
 
 Usage
 -----
@@ -120,6 +121,54 @@ def _load_aggregated(
     return pd.read_sql_query(query, conn, params=params)
 
 
+def _load_llm_evaluation() -> "pd.DataFrame":
+    """Load the most recent llm_evaluation_*.xlsx from data/exports/, if any.
+
+    Returns an empty DataFrame silently when no evaluation file is found.
+    The evaluation file is produced by src/evaluation/llm_evaluator.py.
+    """
+    import glob
+    import pandas as pd
+
+    pattern = os.path.join(EXPORT_DIR, "llm_evaluation_*.xlsx")
+    files   = sorted(glob.glob(pattern))
+    if not files:
+        return pd.DataFrame()
+
+    latest = files[-1]
+    try:
+        df = pd.read_excel(latest, engine="openpyxl")
+        print(f"[Export] LLM evaluation loaded from: {os.path.basename(latest)} ({len(df)} rows)")
+        return df
+    except Exception as exc:
+        print(f"[Export] Warning: could not load LLM evaluation file: {exc}")
+        return pd.DataFrame()
+
+
+def _load_llm_comparisons(
+    conn: sqlite3.Connection,
+    date_filter: str | None,
+    last_days: int | None,
+) -> "pd.DataFrame":
+    """Load llm_comparisons with the thesis-relevant columns only.
+
+    Excludes the raw context_json column (stored for debugging, not analysis).
+    """
+    df = _load_table(conn, "llm_comparisons", date_filter, last_days)
+    if df.empty:
+        return df
+
+    # Select the columns the thesis evaluation cares about; ignore id/context_json.
+    display_cols = [
+        "timestamp", "trigger_reason",
+        "llama_response", "qwen_response",
+        "llama_latency_ms", "qwen_latency_ms",
+        "stress_index",
+    ]
+    available = [c for c in display_cols if c in df.columns]
+    return df[available]
+
+
 def _compute_correlations(agg_df: "pd.DataFrame") -> "pd.DataFrame":
     """Pearson correlation matrix of the key numeric columns in aggregated_windows."""
     key_cols = [
@@ -210,26 +259,32 @@ def export(
     try:
         print(f"[Export] Reading data from {DB_PATH} ...")
 
-        df_physio  = _load_table(conn, "physio_readings",  date_filter, last_days)
-        df_face    = _load_table(conn, "face_readings",    date_filter, last_days)
-        df_desktop = _load_table(conn, "desktop_readings", date_filter, last_days)
-        df_agg     = _load_aggregated(conn, date_filter, last_days)
-        df_interv  = _load_table(conn, "interventions",   date_filter, last_days)
-        df_corr    = _compute_correlations(df_agg)
-        df_summary = _compute_summary(df_agg)
+        df_physio   = _load_table(conn, "physio_readings",  date_filter, last_days)
+        df_face     = _load_table(conn, "face_readings",    date_filter, last_days)
+        df_desktop  = _load_table(conn, "desktop_readings", date_filter, last_days)
+        df_agg      = _load_aggregated(conn, date_filter, last_days)
+        df_interv   = _load_table(conn, "interventions",    date_filter, last_days)
+        df_llm_cmp  = _load_llm_comparisons(conn, date_filter, last_days)
+        df_llm_eval = _load_llm_evaluation()
+        df_corr     = _compute_correlations(df_agg)
+        df_summary  = _compute_summary(df_agg)
 
         print(f"[Export] Rows: physio={len(df_physio)}, face={len(df_face)}, "
               f"desktop={len(df_desktop)}, windows={len(df_agg)}, "
-              f"interventions={len(df_interv)}")
+              f"interventions={len(df_interv)}, llm_comparisons={len(df_llm_cmp)}, "
+              f"llm_evaluation={len(df_llm_eval)}")
 
         with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-            _style_and_write(writer, df_physio,  "Raw Physio")
-            _style_and_write(writer, df_face,    "Raw Face")
-            _style_and_write(writer, df_desktop, "Raw Desktop")
-            _style_and_write(writer, df_agg,     "5-Min Windows")
-            _style_and_write(writer, df_interv,  "Interventions")
-            _style_and_write(writer, df_corr,    "Correlations")
-            _style_and_write(writer, df_summary, "Summary Stats")
+            _style_and_write(writer, df_physio,   "Raw Physio")
+            _style_and_write(writer, df_face,     "Raw Face")
+            _style_and_write(writer, df_desktop,  "Raw Desktop")
+            _style_and_write(writer, df_agg,      "5-Min Windows")
+            _style_and_write(writer, df_interv,   "Interventions")
+            _style_and_write(writer, df_llm_cmp,  "LLM Comparison")
+            if not df_llm_eval.empty:
+                _style_and_write(writer, df_llm_eval, "LLM Evaluation")
+            _style_and_write(writer, df_corr,     "Correlations")
+            _style_and_write(writer, df_summary,  "Summary Stats")
 
         print(f"[Export] Saved to {out_path}")
         return out_path
