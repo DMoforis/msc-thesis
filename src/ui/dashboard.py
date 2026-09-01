@@ -1477,30 +1477,79 @@ class CenterPanel(QWidget):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _InterventionItem(QWidget):
-    """Single row in the intervention log list."""
+    """Single row in the intervention log list; click anywhere to expand."""
 
-    def __init__(self, time_s: str, label: str, message: str, color: str,
+    _STYLE_COLLAPSED = "border-left: 0px; background: transparent; padding-left: 0px;"
+    _STYLE_EXPANDED  = "border-left: 3px solid #4ecdc4; background: transparent; padding-left: 6px;"
+
+    def __init__(self, time_s: str, label: str, full_message: str, color: str,
                  parent=None):
         super().__init__(parent)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._expanded = False
+        self._li       = None
+        self._list_w   = None
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 3, 6, 3)
         lay.setSpacing(2)
 
         top_row = QHBoxLayout()
         top_row.setContentsMargins(0, 0, 0, 0)
+
         t_lbl = QLabel(time_s)
         t_lbl.setStyleSheet(f"color: {c('sub')}; font-size: 9px;")
         top_row.addWidget(t_lbl)
         top_row.addStretch()
+
         r_lbl = QLabel(label)
         r_lbl.setStyleSheet(f"color: {color}; font-size: 9px; font-weight: bold;")
         top_row.addWidget(r_lbl)
+
+        # Collapse/expand chevron — updates in toggle_expand
+        self._chevron = QLabel("▼")
+        self._chevron.setStyleSheet(f"color: {c('sub')}; font-size: 8px;")
+        self._chevron.setVisible(len(full_message) > 80)
+        top_row.addWidget(self._chevron)
+
         lay.addLayout(top_row)
 
-        msg_lbl = QLabel(message)
-        msg_lbl.setStyleSheet(f"color: {c('text')}; font-size: 10px;")
-        msg_lbl.setWordWrap(True)
-        lay.addWidget(msg_lbl)
+        collapsed = (full_message[:80] + "…") if len(full_message) > 80 else full_message
+
+        self._msg_lbl = QLabel(collapsed)
+        self._msg_lbl.setStyleSheet(f"color: {c('text')}; font-size: 10px;")
+        self._msg_lbl.setWordWrap(False)
+        self._msg_lbl.setToolTip(full_message)
+        self._msg_lbl.setToolTipDuration(10000)
+        lay.addWidget(self._msg_lbl)
+
+        self._collapsed     = collapsed
+        self._full_message  = full_message
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if len(self._full_message) <= 80:
+            return
+        if self._expanded:
+            self._msg_lbl.setText(self._collapsed)
+            self._msg_lbl.setWordWrap(False)
+            self._chevron.setText("▼")
+            self.setStyleSheet(self._STYLE_COLLAPSED)
+            self._expanded = False
+        else:
+            self._msg_lbl.setText(self._full_message)
+            self._msg_lbl.setWordWrap(True)
+            self._chevron.setText("▲")
+            self.setStyleSheet(self._STYLE_EXPANDED)
+            self._expanded = True
+        self.adjustSize()
+        if self._li is not None and self._list_w is not None:
+            self._li.setSizeHint(QSize(240, self.sizeHint().height()))
+
+    def set_list_item(self, li, list_w) -> None:
+        """Link this widget to its QListWidgetItem so expand can resize it."""
+        self._li     = li
+        self._list_w = list_w
 
 
 class RightPanel(QWidget):
@@ -1555,14 +1604,14 @@ class RightPanel(QWidget):
 
             label = _TRIGGER_LABELS.get(reason, reason.replace("_", " ").title())
             col   = c(_TRIGGER_COLORS.get(reason, "sub"))
-            short_msg = (msg[:68] + "…") if len(msg) > 68 else msg
 
             li = QListWidgetItem()
-            widget = _InterventionItem(time_str, label, short_msg, col)
+            widget = _InterventionItem(time_str, label, msg, col)
             widget.setMinimumHeight(48)
             li.setSizeHint(QSize(240, widget.sizeHint().height()))
             self.list_w.addItem(li)
             self.list_w.setItemWidget(li, widget)
+            widget.set_list_item(li, self.list_w)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

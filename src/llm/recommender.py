@@ -37,6 +37,7 @@ Usage
 
 import os
 import sys
+import time
 import concurrent.futures
 
 # ── Path bootstrap ────────────────────────────────────────────────────────────
@@ -216,59 +217,59 @@ class WellbeingRecommender:
 
     def _generate_with_comparison(self, context: dict) -> str | None:
         """
-        Run both LLMs in parallel; return the primary response immediately.
+        Run Llama first (notification-critical), then Qwen sequentially in a
+        background thread once Llama has finished and released GPU memory.
 
-        The secondary model (Qwen) result is collected in a daemon background
-        thread and written to the llm_comparisons table after it finishes.
-        The notification is never delayed waiting for Qwen.
+        Sequential execution avoids VRAM contention that caused Qwen to return
+        empty responses when both models loaded simultaneously.  The 2-second
+        sleep between calls gives the GPU allocator time to reclaim Llama's
+        memory before Qwen starts loading.
+
+        The notification is dispatched with Llama's response immediately after
+        Llama completes; Qwen's result is saved to llm_comparisons once it
+        finishes without affecting the notification latency.
         """
         import threading
 
-        # Both models receive the same prompt. Thinking suppression for Qwen 3.5
-        # is applied at the API level inside _timed_ollama_call (think=False option),
-        # not via a text suffix which proved unreliable.
         prompt = _build_prompt(context)
 
-        # Submit secondary first so both start as close together as possible.
-        f_qwen  = self._executor_secondary.submit(
-            self._timed_ollama_call, OLLAMA_MODEL_SECONDARY, prompt
-        )
-        f_llama = self._executor.submit(
-            self._timed_ollama_call, OLLAMA_MODEL_PRIMARY, prompt
-        )
-
-        # Collect primary result (this is the notification-critical path).
+        # ── Step 1: Run Llama (primary, notification-critical) ────────────────
         llama_text, llama_ms = None, None
         try:
+            f_llama = self._executor.submit(
+                self._timed_ollama_call, OLLAMA_MODEL_PRIMARY, prompt
+            )
             raw_llama, llama_ms = f_llama.result(timeout=self._timeout)
             llama_text = _clean_response(raw_llama)
         except concurrent.futures.TimeoutError:
             llama_ms = round(self._timeout * 1000, 1)
+            print(f"[Recommender] Primary model timed out after {llama_ms:.0f} ms")
         except Exception as exc:
             print(f"[Recommender] Primary model error: {exc}. Falling back to template.")
             self._ollama_ok = False
 
-        # Collect secondary result + save comparison in a daemon thread so the
-        # notification is dispatched without waiting for Qwen.
-        def _collect_and_save() -> None:
+        print(f"[Recommender] Llama response: {llama_text[:50] if llama_text else 'None'}")
+
+        # ── Step 2: Run Qwen in background after Llama finishes ───────────────
+        def _run_qwen_and_save() -> None:
+            # Allow GPU memory to settle after Llama unloads before Qwen starts.
+            time.sleep(2)
+
             qwen_text, qwen_ms = None, None
             try:
+                f_qwen = self._executor_secondary.submit(
+                    self._timed_ollama_call, OLLAMA_MODEL_SECONDARY, prompt
+                )
                 raw_qwen, qwen_ms = f_qwen.result(timeout=OLLAMA_SECONDARY_TIMEOUT)
                 qwen_text = _clean_response(raw_qwen)
             except concurrent.futures.TimeoutError:
                 qwen_ms = round(OLLAMA_SECONDARY_TIMEOUT * 1000, 1)
                 print(f"[Recommender] Secondary model timed out after {qwen_ms:.0f} ms")
             except Exception as exc:
+                qwen_ms = round(OLLAMA_SECONDARY_TIMEOUT * 1000, 1)
                 print(f"[Recommender] Secondary model ({OLLAMA_MODEL_SECONDARY}) error: {exc}")
 
-            print(
-                f"[Recommender] Llama response: "
-                f"{llama_text[:50] if llama_text else 'None'}"
-            )
-            print(
-                f"[Recommender] Qwen response: "
-                f"{qwen_text[:50] if qwen_text else 'None'}"
-            )
+            print(f"[Recommender] Qwen response: {qwen_text[:50] if qwen_text else 'None'}")
             try:
                 _save_comparison_row(
                     self._db_path, context,
@@ -278,7 +279,7 @@ class WellbeingRecommender:
             except Exception as exc:
                 print(f"[Recommender] Comparison DB save error: {exc}")
 
-        threading.Thread(target=_collect_and_save, daemon=True).start()
+        threading.Thread(target=_run_qwen_and_save, daemon=True).start()
 
         return llama_text
 
@@ -309,40 +310,72 @@ class WellbeingRecommender:
         import time
         import ollama
 
-        # Qwen 3.5 exposes chain-of-thought control via the API option;
-        # the /no_think text suffix does not reliably suppress it.
-        suppress_thinking = ("qwen3.5" in model.lower()) or not use_thinking
+        is_qwen = "qwen" in model.lower()
+        suppress_thinking = is_qwen or not use_thinking
 
         start = time.monotonic()
 
         if suppress_thinking:
+            if is_qwen:
+                # Triple suppression for Qwen: API option + system role instruction
+                # + /no_think text suffix.  The options-only approach fails because
+                # thinking tokens consume num_predict before any content is emitted.
+                messages = [
+                    {
+                        "role":    "system",
+                        "content": (
+                            "You are a well-being assistant. Respond directly and "
+                            "concisely. Do not show your thinking process. Output "
+                            "ONLY the final recommendation, nothing else."
+                        ),
+                    },
+                    {"role": "user", "content": prompt + " /no_think"},
+                ]
+            else:
+                messages = [{"role": "user", "content": prompt}]
+
             response = ollama.chat(
                 model    = model,
-                messages = [{"role": "user", "content": prompt}],
-                options  = {"think": False, "num_predict": 80, "temperature": 0.7},
+                messages = messages,
+                options  = {
+                    "think":       False,
+                    "num_predict": 150,
+                    "num_ctx":     2048,
+                    "temperature": 0.7,
+                },
             )
             latency_ms = round((time.monotonic() - start) * 1000, 1)
             if isinstance(response, dict):
-                text = response.get("message", {}).get("content", "") or ""
+                msg_obj       = response.get("message", {})
+                text          = msg_obj.get("content", "") or ""
+                thinking_text = msg_obj.get("thinking", "") or ""
             else:
-                msg  = getattr(response, "message", None)
-                text = (msg.content if msg and hasattr(msg, "content") else "") or ""
+                msg_obj       = getattr(response, "message", None)
+                text          = (msg_obj.content if msg_obj and hasattr(msg_obj, "content") else "") or ""
+                thinking_text = (getattr(msg_obj, "thinking", "") if msg_obj else "") or ""
         else:
             response = ollama.generate(
                 model   = model,
-                prompt  = prompt,
-                options = {"num_predict": 80, "temperature": 0.7},
+                prompt  = call_prompt,
+                options = {"num_predict": 150, "temperature": 0.7},
             )
-            latency_ms = round((time.monotonic() - start) * 1000, 1)
+            latency_ms    = round((time.monotonic() - start) * 1000, 1)
+            thinking_text = ""
             if isinstance(response, dict):
                 text = response.get("response", "") or ""
             else:
                 text = getattr(response, "response", "") or ""
 
-        print(
-            f"[Recommender] {model} raw text "
-            f"({latency_ms:.0f} ms): {repr(text[:80]) if text else 'EMPTY'}"
-        )
+        if text:
+            print(f"[Recommender] {model} raw text ({latency_ms:.0f} ms): {repr(text[:80])}")
+        else:
+            print(f"[Recommender] {model} EMPTY ({latency_ms:.0f} ms) — full response: {response!r}")
+            # Last resort: extract a usable sentence from the thinking field if
+            # done_reason='length' consumed all tokens before producing content.
+            text = _extract_from_thinking(thinking_text)
+            if text:
+                print(f"[Recommender] {model} salvaged from thinking field: {repr(text[:80])}")
+
         return text, latency_ms
 
     def _ollama_call(self, prompt: str) -> str:
@@ -354,6 +387,58 @@ class WellbeingRecommender:
 # ─────────────────────────────────────────────────────────────────────────────
 # PROMPT + RESPONSE HELPERS (module-level, no state)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_from_thinking(thinking: str) -> str:
+    """Pull the final recommendation out of a Qwen thinking block.
+
+    Called only when content is empty (done_reason='length' consumed all
+    num_predict tokens on internal reasoning).
+
+    Strategy:
+    1. Split on common final-answer markers; take text AFTER the last one found.
+    2. Strip markdown bold/italic and whitespace.
+    3. Accept only if 20–500 characters.
+    4. Return empty string if nothing valid found (caller uses template fallback).
+    """
+    import re
+
+    if not thinking:
+        return ""
+
+    markers = [
+        "Final Decision:",
+        "Final Polish:",
+        "Final Answer:",
+        "Revised:",
+        "Refining",
+        "Let's make it clearer:",
+        "6.", "7.", "8.",           # last numbered steps in thinking chain
+    ]
+
+    best_pos   = -1
+    best_marker = ""
+    for marker in markers:
+        pos = thinking.rfind(marker)          # last occurrence
+        if pos > best_pos:
+            best_pos    = pos
+            best_marker = marker
+
+    candidate = ""
+    if best_pos >= 0:
+        after = thinking[best_pos + len(best_marker):].strip()
+        # Keep only the first paragraph (stop at a blank line or section header)
+        first_para = re.split(r"\n\s*\n|\n(?=[A-Z*#])", after)[0]
+        candidate = first_para.strip()
+
+    # Remove markdown bold/italic markers
+    candidate = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", candidate)
+    candidate = candidate.strip()
+
+    if 20 <= len(candidate) <= 500:
+        return candidate
+
+    return ""
+
 
 def _build_prompt(ctx: dict) -> str:
     """Build the Ollama prompt for the given context.

@@ -39,10 +39,10 @@ W_FACE    = 0.4
 W_DESKTOP = 0.2
 
 # ── Intervention thresholds ───────────────────────────────────────────────────
-STRESS_TRIGGER_THRESHOLD   = 0.65   # stress_index > this for 2 consecutive windows
+STRESS_TRIGGER_THRESHOLD   = 0.10   # stress_index > this for 2 consecutive windows
 VALENCE_TRIGGER_THRESHOLD  = -0.4   # kept for backwards compatibility
 AROUSAL_LOW_THRESHOLD      = 0.2    # kept for backwards compatibility
-MIN_MINUTES_BETWEEN_NOTIFS = 15     # cooldown between notifications (minutes)
+MIN_MINUTES_BETWEEN_NOTIFS = 0     # cooldown between notifications (minutes)
 
 # Per-condition thresholds (multi-trigger system)
 DISENGAGEMENT_VALENCE_THRESHOLD   = -0.30  # avg_valence below this → low mood
@@ -71,7 +71,7 @@ OLLAMA_MODEL           = OLLAMA_MODEL_PRIMARY   # alias used by WindowClassifier
 LLM_COMPARISON_MODE = True
 
 OLLAMA_TIMEOUT           = 30   # seconds; primary falls back to template if exceeded
-OLLAMA_SECONDARY_TIMEOUT = 45   # seconds; Qwen runs in background — longer wait
+OLLAMA_SECONDARY_TIMEOUT = 60   # seconds; Qwen runs in background — longer wait
                                 # does not delay the notification
 
 # Independent judge model used by src/evaluation/llm_evaluator.py to score
