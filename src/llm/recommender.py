@@ -107,6 +107,53 @@ _TRIGGER_GUIDANCE: dict[str, str] = {
 
 _TEMPLATE_INDEX: dict[str, int] = {}   # rotating pointer per trigger type
 
+# Per-trigger category lists; the recommender rotates through these so that
+# consecutive notifications of the same type suggest different strategies.
+_VARIETY_CATEGORIES: dict[str, list[str]] = {
+    "high_stress": [
+        "physical (stretching, movement, brief walk)",
+        "breathing or mindfulness exercise",
+        "cognitive (task switch, prioritise, simplify)",
+        "social (call a colleague, talk to someone)",
+        "environmental (change location, get fresh air, open a window)",
+    ],
+    "disengagement": [
+        "task re-engagement (identify the next single action)",
+        "physical movement (walk, stretch, change posture)",
+        "time-boxing technique (Pomodoro, 10-min sprint)",
+        "environmental change (different room, natural light)",
+    ],
+    "negative_affect": [
+        "breathing or grounding exercise",
+        "brief physical reset (walk, stretch)",
+        "cognitive reframing (write one thing going well)",
+        "sensory break (close eyes, listen to calming audio)",
+    ],
+    "eye_strain": [
+        "20-20-20 rule (look 20 ft away for 20 s)",
+        "full eye rest (close eyes 30–60 s)",
+        "screen distance and brightness adjustment",
+        "blinking exercise and eye massage",
+    ],
+    "prolonged_idle": [
+        "micro re-engagement (write one sentence or bullet)",
+        "task decomposition (break the blocker into smaller steps)",
+        "brief physical movement then return",
+        "change of medium (voice memo, whiteboard sketch)",
+    ],
+    "positive_flow": [
+        "brief encouragement and hydration reminder",
+        "acknowledge focus streak and suggest a coming break",
+        "positive reinforcement and posture check",
+    ],
+    "default": [
+        "physical movement or stretch",
+        "brief mindfulness or breathing",
+        "short screen break",
+        "hydration and posture reset",
+    ],
+}
+
 
 class WellbeingRecommender:
     """
@@ -136,6 +183,9 @@ class WellbeingRecommender:
         self._timeout  = timeout
         self._db_path  = db_path
         self._ollama_ok: bool | None = None
+        # Variety state — prevent repetitive recommendations across calls.
+        self._recent_responses: list[str] = []   # last 3 delivered messages
+        self._category_idx: dict[str, int] = {}  # rotating category pointer per trigger
         # Primary executor — used for the notification-driving LLM call.
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="ollama-rec-primary"
@@ -170,13 +220,25 @@ class WellbeingRecommender:
         """
         trigger = _infer_trigger(context)
 
+        # Attach variety hints so _build_prompt can inject them into the LLM prompt.
+        categories = _VARIETY_CATEGORIES.get(trigger, _VARIETY_CATEGORIES["default"])
+        idx        = self._category_idx.get(trigger, 0)
+        context    = {
+            **context,
+            "_variety_category": categories[idx % len(categories)],
+            "_recent_responses": list(self._recent_responses),
+        }
+        self._category_idx[trigger] = idx + 1
+
         if self._should_try_ollama():
             if LLM_COMPARISON_MODE:
                 msg = self._generate_with_comparison(context)
             else:
                 msg = self._generate_ollama(context)
             if msg:
-                return msg[:200]
+                msg = msg[:200]
+                self._recent_responses = (self._recent_responses + [msg])[-3:]
+                return msg
 
         return _template_message(trigger)
 
@@ -308,40 +370,29 @@ class WellbeingRecommender:
         tuple of (response_text, latency_ms)
         """
         import time
+        import random
         import ollama
 
+        temperature = round(random.uniform(0.6, 0.9), 2)
+
         is_qwen = "qwen" in model.lower()
-        suppress_thinking = is_qwen or not use_thinking
 
         start = time.monotonic()
 
-        if suppress_thinking:
-            if is_qwen:
-                # Triple suppression for Qwen: API option + system role instruction
-                # + /no_think text suffix.  The options-only approach fails because
-                # thinking tokens consume num_predict before any content is emitted.
-                messages = [
-                    {
-                        "role":    "system",
-                        "content": (
-                            "You are a well-being assistant. Respond directly and "
-                            "concisely. Do not show your thinking process. Output "
-                            "ONLY the final recommendation, nothing else."
-                        ),
-                    },
-                    {"role": "user", "content": prompt + " /no_think"},
-                ]
-            else:
-                messages = [{"role": "user", "content": prompt}]
-
+        if is_qwen:
+            # Qwen 3.5 thinking suppression: /no_think prefix at message start
+            # (documented Qwen format) + think:false API option as belt-and-suspenders.
+            # num_predict=512 is necessary: even when thinking is partially suppressed
+            # the model still emits some thinking tokens; 120 was exhausted before
+            # any content was produced (eval_count=120, content='').
             response = ollama.chat(
                 model    = model,
-                messages = messages,
+                messages = [{"role": "user", "content": "/no_think\n\n" + prompt}],
                 options  = {
                     "think":       False,
-                    "num_predict": 150,
-                    "num_ctx":     2048,
-                    "temperature": 0.7,
+                    "num_predict": 512,
+                    "num_ctx":     4096,
+                    "temperature": temperature,
                 },
             )
             latency_ms = round((time.monotonic() - start) * 1000, 1)
@@ -353,11 +404,26 @@ class WellbeingRecommender:
                 msg_obj       = getattr(response, "message", None)
                 text          = (msg_obj.content if msg_obj and hasattr(msg_obj, "content") else "") or ""
                 thinking_text = (getattr(msg_obj, "thinking", "") if msg_obj else "") or ""
+        elif not use_thinking:
+            # Non-Qwen model with thinking explicitly suppressed via chat endpoint.
+            response = ollama.chat(
+                model    = model,
+                messages = [{"role": "user", "content": prompt}],
+                options  = {"think": False, "num_predict": 150, "temperature": temperature},
+            )
+            latency_ms    = round((time.monotonic() - start) * 1000, 1)
+            thinking_text = ""
+            if isinstance(response, dict):
+                text = response.get("message", {}).get("content", "") or ""
+            else:
+                msg_obj = getattr(response, "message", None)
+                text    = (msg_obj.content if msg_obj and hasattr(msg_obj, "content") else "") or ""
         else:
+            # Llama and other standard models — generate endpoint, no think option.
             response = ollama.generate(
                 model   = model,
-                prompt  = call_prompt,
-                options = {"num_predict": 150, "temperature": 0.7},
+                prompt  = prompt,
+                options = {"num_predict": 150, "temperature": temperature},
             )
             latency_ms    = round((time.monotonic() - start) * 1000, 1)
             thinking_text = ""
@@ -389,53 +455,98 @@ class WellbeingRecommender:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_from_thinking(thinking: str) -> str:
-    """Pull the final recommendation out of a Qwen thinking block.
+    """Pull a usable recommendation out of a Qwen thinking block.
 
-    Called only when content is empty (done_reason='length' consumed all
-    num_predict tokens on internal reasoning).
+    Qwen 3.5:4b in Ollama (this build) always runs its thinking process and
+    exhausts num_predict before emitting content.  This function is therefore
+    the primary path for all Qwen responses, not just an edge-case fallback.
 
-    Strategy:
-    1. Split on common final-answer markers; take text AFTER the last one found.
-    2. Strip markdown bold/italic and whitespace.
-    3. Accept only if 20–500 characters.
-    4. Return empty string if nothing valid found (caller uses template fallback).
+    Extraction priority (highest → lowest):
+    1. Last '*Draft N:*' block that ends with '- Good' or '(2 sentences)'
+    2. Last explicit final-answer marker (Final Decision: / Final Answer: etc.)
+    3. Last numbered list item with ≥ 20 chars of actual text
+    4. Last sentence of ≥ 20 chars
+
+    Cleans bold/italic markdown before returning. Returns '' if nothing ≥ 20 chars.
     """
     import re
 
     if not thinking:
         return ""
 
-    markers = [
-        "Final Decision:",
-        "Final Polish:",
-        "Final Answer:",
-        "Revised:",
-        "Refining",
-        "Let's make it clearer:",
-        "6.", "7.", "8.",           # last numbered steps in thinking chain
+    def _clean(s: str) -> str:
+        s = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", s)   # **bold** / *italic*
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    # ── Priority 1: Named candidate blocks ───────────────────────────────────
+    # Qwen uses varying labels: *Draft N:*, *Idea N:*, *Option N:*, etc.
+    # Split on any such marker and treat each segment as a candidate.
+    candidate_segments = re.split(
+        r"\*(?:Draft|Idea|Option|Attempt|Version|Suggestion)\s*\d*:\*\s*",
+        thinking, flags=re.IGNORECASE,
+    )
+    complete_candidates: list[str] = []
+    for segment in candidate_segments[1:]:      # [0] is pre-candidate preamble
+        # Cut at next named-candidate marker or critique/meta section.
+        # Use [\*\s]* to handle both "*Critique" and "*   *Critique" list formats.
+        cut = re.search(
+            r"\n\s*[\*\s]*(?:Critique|Note|Draft|Idea|Option|Attempt|Assess|Refin|Final)",
+            segment, re.IGNORECASE,
+        )
+        if cut:
+            segment = segment[: cut.start()]
+        # Strip trailing markdown list artifacts (e.g. "\n    *   " left by splitter)
+        segment = re.sub(r"[\s*]+$", "", segment)
+        # Strip trailing parenthetical meta-commentary: "(Too vague?)", "- Good", etc.
+        # The trailing punctuation may fall outside the closing paren, hence [.!?]?
+        segment = re.sub(r"\s*\([^)]{0,80}\)[.!?]?\s*$", "", segment)
+        segment = re.sub(
+            r"\s*-?\s*(?:Good|OK|Great|Too generic|Too vague)[.!]?\s*$",
+            "", segment, flags=re.IGNORECASE,
+        )
+        candidate = _clean(segment)
+        # Only accept segments that end with sentence-closing punctuation
+        if len(candidate) >= 20 and re.search(r"[.!?]$", candidate):
+            complete_candidates.append(candidate)
+    # Prefer the last complete candidate (most refined in Qwen's thinking chain)
+    for candidate in reversed(complete_candidates):
+        if 20 <= len(candidate) <= 500:
+            return candidate
+
+    # ── Priority 2: Explicit final-answer markers ─────────────────────────────
+    final_markers = [
+        "Final Polish:", "Final Decision:", "Final Answer:",
+        "Revised:", "Final Recommendation:",
     ]
-
-    best_pos   = -1
-    best_marker = ""
-    for marker in markers:
-        pos = thinking.rfind(marker)          # last occurrence
+    best_pos, best_len = -1, 0
+    for marker in final_markers:
+        pos = thinking.rfind(marker)
         if pos > best_pos:
-            best_pos    = pos
-            best_marker = marker
+            best_pos, best_len = pos, len(marker)
 
-    candidate = ""
     if best_pos >= 0:
-        after = thinking[best_pos + len(best_marker):].strip()
-        # Keep only the first paragraph (stop at a blank line or section header)
-        first_para = re.split(r"\n\s*\n|\n(?=[A-Z*#])", after)[0]
-        candidate = first_para.strip()
+        after = thinking[best_pos + best_len:].strip()
+        first_para = re.split(r"\n\s*\n|\n(?=[A-Z0-9*#])", after)[0]
+        candidate = _clean(first_para)
+        if 20 <= len(candidate) <= 500:
+            return candidate
 
-    # Remove markdown bold/italic markers
-    candidate = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", candidate)
-    candidate = candidate.strip()
+    # ── Priority 3: Last numbered list item that ends with sentence punctuation ──
+    items = re.findall(r"\d+\.\s+([A-Z].{19,})", thinking)
+    for raw in reversed(items):
+        candidate = _clean(raw.split("\n")[0])  # first line only
+        if 20 <= len(candidate) <= 500 and re.search(r"[.!?]$", candidate):
+            return candidate
 
-    if 20 <= len(candidate) <= 500:
-        return candidate
+    # ── Priority 4: Last complete sentence (ends with punctuation) ───────────
+    sentences = [s.strip() for s in re.split(r"[.!?]+", thinking) if s.strip()]
+    for sentence in reversed(sentences):
+        candidate = _clean(sentence)
+        # Only accept if original sentence ended with punctuation (complete sentence)
+        original_end = thinking[thinking.rfind(sentence) + len(sentence):]
+        if 20 <= len(candidate) <= 500 and re.match(r"^[.!?]", original_end):
+            return candidate
 
     return ""
 
@@ -462,6 +573,9 @@ def _build_prompt(ctx: dict) -> str:
     blinks   = ctx.get("blink_rate")
     trigger  = ctx.get("trigger_reason", "default")
 
+    variety_category = ctx.get("_variety_category", "")
+    recent           = ctx.get("_recent_responses", [])
+
     v_str     = f"{valence:+.2f}" if valence is not None else "N/A"
     a_str     = f"{arousal:+.2f}" if arousal is not None else "N/A"
     b_str     = f"{blinks:.1f}/min" if blinks is not None else "N/A"
@@ -474,10 +588,21 @@ def _build_prompt(ctx: dict) -> str:
     else:
         emo_line = f"- Emotional state: valence={v_str}, arousal={a_str}\n"
 
+    variety_line = (
+        f"Focus your recommendation on: {variety_category} strategies.\n"
+        if variety_category else ""
+    )
+    avoid_line = ""
+    if recent:
+        recent_str = " | ".join(recent)[:200]
+        avoid_line = f"IMPORTANT: Do NOT repeat or closely paraphrase these recent recommendations: {recent_str}\n"
+
     return (
         "System: You are a well-being assistant for a knowledge worker.\n"
         "Generate ONE short, friendly recommendation (max 2 sentences).\n"
         f"{guidance}\n"
+        f"{variety_line}"
+        f"{avoid_line}"
         "Never mention medical advice.\n\n"
         "Context:\n"
         f"- Trigger: {trigger}\n"
