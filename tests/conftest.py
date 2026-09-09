@@ -3,10 +3,71 @@ conftest.py
 -----------
 Shared pytest fixtures for the stress detection test suite.
 """
+import time as _real_time
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
 
 from src.utils.db import open_db
+
+
+# ── Threshold isolation fixture ───────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _stable_config(monkeypatch):
+    """
+    Isolate every test from live config.py threshold values.
+
+    config.py is edited during data-collection sessions (low thresholds fire
+    notifications quickly for experimentation).  Without this fixture, those
+    edits bleed into the test suite and cause non-high_stress trigger tests to
+    receive 'high_stress' instead of their expected result.
+
+    Two sets of patches are applied:
+    1. src.fusion.aggregator.* — the aggregator uses `from … import` so the
+       names are bound in the aggregator's own namespace; patching config alone
+       would have no effect.
+    2. src.llm.recommender.* — LLM_COMPARISON_MODE and the module-level `time`
+       reference are patched so that (a) comparison mode is always enabled and
+       (b) the 2-second GPU-settle sleep in _run_qwen_and_save is a no-op,
+       allowing the background Qwen thread to complete within the short waits
+       used in test_llm_comparison.py.
+
+    All patches are reverted automatically by monkeypatch after each test.
+    """
+    import src.utils.config   as cfg
+    import src.fusion.aggregator as agg
+    import src.llm.recommender  as rec
+
+    # ── 1. Aggregator trigger thresholds (production/baseline values) ─────────
+    monkeypatch.setattr(agg, "STRESS_TRIGGER_THRESHOLD",          0.65)
+    # MIN_MINUTES_BETWEEN_NOTIFS is NOT patched: config.py has 5 and
+    # test_cooldown_prevents_double_trigger imports that value directly to
+    # compute its time offset — keeping them in sync avoids a mismatch.
+    monkeypatch.setattr(agg, "DISENGAGEMENT_VALENCE_THRESHOLD",   -0.30)
+    monkeypatch.setattr(agg, "DISENGAGEMENT_AROUSAL_THRESHOLD",   -0.15)
+    monkeypatch.setattr(agg, "DISENGAGEMENT_ACTIVITY_MAX",        50.0)
+    monkeypatch.setattr(agg, "NEGATIVE_AFFECT_VALENCE_THRESHOLD", -0.35)
+    monkeypatch.setattr(agg, "NEGATIVE_AFFECT_AROUSAL_MIN",       0.20)
+    monkeypatch.setattr(agg, "EYE_STRAIN_BLINK_THRESHOLD",        8.0)
+    monkeypatch.setattr(agg, "IDLE_ACTIVITY_THRESHOLD",           15.0)
+    monkeypatch.setattr(agg, "FLOW_STRESS_CEILING",               0.20)
+    monkeypatch.setattr(agg, "FLOW_ACTIVITY_FLOOR",               65.0)
+    monkeypatch.setattr(agg, "FLOW_VALENCE_FLOOR",                0.10)
+
+    # ── 2. LLM recommender ───────────────────────────────────────────────────
+    # Ensure comparison mode is True regardless of what config.py says.
+    monkeypatch.setattr(cfg, "LLM_COMPARISON_MODE", True)
+    monkeypatch.setattr(rec, "LLM_COMPARISON_MODE", True)
+
+    # Replace the module-level `time` in recommender with a thin mock so that
+    # `time.sleep(2)` in _run_qwen_and_save is a no-op.  All other time
+    # functions (monotonic etc.) delegate to the real module via wraps=.
+    # Note: _timed_ollama_call uses a *local* `import time`, so it is unaffected.
+    fake_time = MagicMock(wraps=_real_time)
+    fake_time.sleep = MagicMock()           # no-op; LLM tests mock the call anyway
+    monkeypatch.setattr(rec, "time", fake_time)
 
 
 class MockLandmark:
