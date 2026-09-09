@@ -318,7 +318,7 @@ Output: `data/exports/stress_analysis_<date>.xlsx`
 ### Test suite
 
 ```powershell
-pytest tests/ -v   # 83 tests
+pytest tests/ -v   # 99 tests
 ```
 
 ---
@@ -505,7 +505,7 @@ stress_detection/
 │       ├── baseline.py                ← personal baseline calibration
 │       └── emotion_labels.py          ← Russell (1980) VA → emotion label mapping
 │
-└── tests/                             ← 83 tests
+└── tests/                             ← 99 tests
     ├── conftest.py                    ← shared fixtures
     ├── test_ear.py                    ← EAR formula and blink detection
     ├── test_hrv.py                    ← RMSSD computation and validation
