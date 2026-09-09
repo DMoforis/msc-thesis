@@ -39,18 +39,18 @@ W_FACE    = 0.4
 W_DESKTOP = 0.2
 
 # ── Intervention thresholds ───────────────────────────────────────────────────
-STRESS_TRIGGER_THRESHOLD   = 0.10   # stress_index > this for 2 consecutive windows
+STRESS_TRIGGER_THRESHOLD   = 0.65   # stress_index > this for 2 consecutive windows
 VALENCE_TRIGGER_THRESHOLD  = -0.4   # kept for backwards compatibility
 AROUSAL_LOW_THRESHOLD      = 0.2    # kept for backwards compatibility
-MIN_MINUTES_BETWEEN_NOTIFS = 5     # cooldown between notifications (minutes)
+MIN_MINUTES_BETWEEN_NOTIFS = 15     # cooldown between notifications (minutes)
 
 # Per-condition thresholds (multi-trigger system)
-DISENGAGEMENT_VALENCE_THRESHOLD   = -0.10  # avg_valence below this → low mood
+DISENGAGEMENT_VALENCE_THRESHOLD   = -0.30  # avg_valence below this → low mood
 DISENGAGEMENT_AROUSAL_THRESHOLD   = -0.15  # avg_arousal below this → low energy
 DISENGAGEMENT_ACTIVITY_MAX        = 50.0   # avg_activity_pct must also be below this
-NEGATIVE_AFFECT_VALENCE_THRESHOLD = -0.10  # avg_valence below this → tense/anxious
+NEGATIVE_AFFECT_VALENCE_THRESHOLD = -0.35  # avg_valence below this → tense/anxious
 NEGATIVE_AFFECT_AROUSAL_MIN       = 0.20   # avg_arousal above this → activated
-EYE_STRAIN_BLINK_THRESHOLD        = 20.0    # blinks/min below this → screen fixation
+EYE_STRAIN_BLINK_THRESHOLD        = 8.0    # blinks/min below this → screen fixation
 IDLE_ACTIVITY_THRESHOLD           = 15.0   # avg_activity_pct below this → near idle
 FLOW_STRESS_CEILING               = 0.20   # stress_index must be below this
 FLOW_ACTIVITY_FLOOR               = 65.0   # avg_activity_pct must be above this
