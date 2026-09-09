@@ -474,10 +474,29 @@ def _extract_from_thinking(thinking: str) -> str:
     if not thinking:
         return ""
 
+    # Phrases that indicate the text is still in Qwen's analysis section,
+    # not in the final recommendation.  Any candidate containing one of these
+    # is rejected so the caller falls through to the template fallback.
+    _ANALYSIS_MARKERS = (
+        "* Constraint", "* Task", "* Role",
+        "Analyze the Request", "**",
+    )
+
     def _clean(s: str) -> str:
         s = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", s)   # **bold** / *italic*
         s = re.sub(r"\s+", " ", s).strip()
         return s
+
+    def _is_valid_candidate(text: str) -> bool:
+        """Return False if text looks like analysis/constraint prose, not a recommendation."""
+        if len(text) < 30:
+            return False
+        if text.lstrip().startswith(("*", "-")):
+            return False
+        for marker in _ANALYSIS_MARKERS:
+            if marker in text:
+                return False
+        return True
 
     # ── Priority 1: Named candidate blocks ───────────────────────────────────
     # Qwen uses varying labels: *Draft N:*, *Idea N:*, *Option N:*, etc.
@@ -507,11 +526,12 @@ def _extract_from_thinking(thinking: str) -> str:
         )
         candidate = _clean(segment)
         # Only accept segments that end with sentence-closing punctuation
-        if len(candidate) >= 20 and re.search(r"[.!?]$", candidate):
+        # and do not contain analysis/constraint prose.
+        if re.search(r"[.!?]$", candidate) and _is_valid_candidate(candidate):
             complete_candidates.append(candidate)
     # Prefer the last complete candidate (most refined in Qwen's thinking chain)
     for candidate in reversed(complete_candidates):
-        if 20 <= len(candidate) <= 500:
+        if len(candidate) <= 500:
             return candidate
 
     # ── Priority 2: Explicit final-answer markers ─────────────────────────────
@@ -529,23 +549,24 @@ def _extract_from_thinking(thinking: str) -> str:
         after = thinking[best_pos + best_len:].strip()
         first_para = re.split(r"\n\s*\n|\n(?=[A-Z0-9*#])", after)[0]
         candidate = _clean(first_para)
-        if 20 <= len(candidate) <= 500:
+        if _is_valid_candidate(candidate) and len(candidate) <= 500:
             return candidate
 
     # ── Priority 3: Last numbered list item that ends with sentence punctuation ──
     items = re.findall(r"\d+\.\s+([A-Z].{19,})", thinking)
     for raw in reversed(items):
         candidate = _clean(raw.split("\n")[0])  # first line only
-        if 20 <= len(candidate) <= 500 and re.search(r"[.!?]$", candidate):
+        if re.search(r"[.!?]$", candidate) and _is_valid_candidate(candidate) and len(candidate) <= 500:
             return candidate
 
     # ── Priority 4: Last complete sentence (ends with punctuation) ───────────
     sentences = [s.strip() for s in re.split(r"[.!?]+", thinking) if s.strip()]
     for sentence in reversed(sentences):
         candidate = _clean(sentence)
-        # Only accept if original sentence ended with punctuation (complete sentence)
         original_end = thinking[thinking.rfind(sentence) + len(sentence):]
-        if 20 <= len(candidate) <= 500 and re.match(r"^[.!?]", original_end):
+        if (re.match(r"^[.!?]", original_end)
+                and _is_valid_candidate(candidate)
+                and len(candidate) <= 500):
             return candidate
 
     return ""
@@ -644,18 +665,41 @@ def _strip_thinking_artifacts(text: str) -> str:
 
 
 def _clean_response(raw: str) -> str | None:
-    """Strip thinking artifacts, whitespace, and unwanted prefixes.
+    """Strip thinking artifacts, preamble phrases, and surrounding quotes.
 
     Returns None when the cleaned text is shorter than 10 characters
     (indicates the model produced an empty or degenerate response).
     """
-    # First remove any reasoning/thinking blocks the model may have emitted.
-    text = _strip_thinking_artifacts(raw)
+    if not raw:
+        return None
 
-    # Remove common LLM-generated prefixes.
-    for prefix in ("Recommendation:", "Here's a recommendation:", "Sure!"):
-        if text.lower().startswith(prefix.lower()):
-            text = text[len(prefix):].strip()
+    # Remove any reasoning/thinking blocks the model may have emitted.
+    text = _strip_thinking_artifacts(raw).strip()
+
+    # Remove common LLM-generated preamble phrases (case-insensitive prefix match).
+    _PREAMBLES = [
+        "Here's a friendly recommendation:",
+        "Here is a friendly recommendation:",
+        "Here's my recommendation:",
+        "Here's a recommendation:",
+        "Here is a recommendation:",
+        "Here's a suggestion:",
+        "Here is a suggestion:",
+        "Recommendation:",
+        "Sure!",
+        "Sure,",
+    ]
+    for preamble in _PREAMBLES:
+        if text.lower().startswith(preamble.lower()):
+            text = text[len(preamble):].strip()
+            break  # only strip one preamble
+
+    # Remove surrounding quotation marks added by some models.
+    if len(text) >= 2 and text[0] in ('"', "'") and text[-1] == text[0]:
+        text = text[1:-1].strip()
+    # Also strip a leading quote with no matching closing quote (partial wrap).
+    elif text.startswith('"') or text.startswith("'"):
+        text = text[1:].strip()
 
     if len(text) < 10:
         return None
