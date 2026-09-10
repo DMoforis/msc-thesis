@@ -1,4 +1,4 @@
-# SPEC.md — Technical Specification
+# SPEC.md â€” Technical Specification
 ## Multimodal Stress Detection & Mental Well-being Support System
 
 ---
@@ -66,14 +66,14 @@ CREATE TABLE physio_readings (
 **Changes from Phase 1:**
 - Receives frames from SharedCameraFeed
 - Adds Valence-Arousal prediction per 30s window
-- Roll° computation fixed using quaternion decomposition
+- RollÂ° computation fixed using quaternion decomposition
 
 **Valence-Arousal model:**
-- Model: **EmoNet-8** (Toisoul et al., 2021) — `data/models/emonet_8.pth`
+- Model: **EmoNet-8** (Toisoul et al., 2021) â€” `data/models/emonet_8.pth`
 - Architecture: `data/models/emonet_arch.py` (8-class emotion backbone repurposed for VA regression)
 - Runs locally via PyTorch, GPU-accelerated via CUDA (CPU fallback supported)
-- Input: cropped face image from MediaPipe bounding box (resized to 256×256)
-- Output: valence (−1 to +1), arousal (−1 to +1)
+- Input: cropped face image from MediaPipe bounding box (resized to 256Ã—256)
+- Output: valence (âˆ’1 to +1), arousal (âˆ’1 to +1)
 - Valence: negative = unpleasant/stressed, positive = pleasant/relaxed
 - Arousal: low = drowsy/disengaged, high = alert/excited
 - *Note: original SPEC referenced `Mavdol/NPC-Valence-Arousal-Prediction` (HuggingFace transformers). Changed to EmoNet-8 for more accurate facial affect estimation and lower GPU memory footprint.*
@@ -111,7 +111,7 @@ ollama pull llama3.1:8b
 
 **Purpose:** Replace hardcoded keyword matching with intelligent LLM classification.
 
-> **Important implementation note — Flutter/Python architecture constraint:**
+> **Important implementation note â€” Flutter/Python architecture constraint:**
 > The desktop context data (active window title, idle time, activity %) is written
 > directly to `desktop_readings` by the Flutter native Windows subprocess.  Because
 > Flutter is a Dart/compiled binary it cannot call the Python Ollama client at
@@ -120,12 +120,12 @@ ollama pull llama3.1:8b
 > live Ollama inference.  The Python `src/llm/classifier.py` module is available
 > for offline re-classification of stored window titles, but is not called in the
 > live monitoring pipeline.  This is documented as a known limitation in the
-> thesis (see §Known Limitations).
+> thesis (see Â§Known Limitations).
 
 **Interface:**
 ```python
 classifier = WindowClassifier()
-category = classifier.classify("DMoforis/msc-thesis — GitHub — Google Chrome")
+category = classifier.classify("DMoforis/msc-thesis â€” GitHub â€” Google Chrome")
 # Returns: "Academic Work"
 
 category = classifier.classify("Facebook")
@@ -148,7 +148,7 @@ category = classifier.classify("Facebook")
 - Prompt engineered for single-word/short category response
 - Response cached: same title always returns same category (LRU cache)
 - Falls back to keyword matching if Ollama is not running
-- Timeout: 2 seconds max per classification call
+- Timeout: uses the configured local Ollama timeout; if Ollama is unavailable or times out, the system falls back to keyword/template-based handling
 
 ### 4b. Recommendation Engine
 
@@ -247,40 +247,40 @@ stress_index = (
 **Per-modality scoring rules:**
 
 Physio score:
-- HR deviation from personal baseline → 0-1
-- RMSSD below personal baseline → 0-1
+- HR deviation from personal baseline â†’ 0-1
+- RMSSD below personal baseline â†’ 0-1
 - Combined: mean of both
 
 Face score:
-- Valence normalised to 0-1 (valence=-1 → score=1, valence=+1 → score=0)
-- Arousal deviation from neutral → 0-1
-- EAR below threshold → increases score
+- Valence normalised to 0-1 (valence=-1 â†’ score=1, valence=+1 â†’ score=0)
+- Arousal deviation from neutral â†’ 0-1
+- EAR below threshold â†’ increases score
 - Combined: weighted mean
 
-Desktop score — three components averaged (missing data excluded):
+Desktop score â€” three components averaged (missing data excluded):
 
 1. **App category cognitive load** (Flutter taxonomy mapping):
 
    | Flutter category | Weight | Rationale |
    |-----------------|--------|-----------|
-   | `IDE/Terminal`  | 0.7    | Intense focus work — high cognitive load |
-   | `Communication` | 0.6    | Meetings / email — sustained social pressure |
-   | `Document`      | 0.5    | Sustained writing effort — moderate load |
-   | `Browser`       | 0.3    | Research or distraction — ambiguous context |
-   | `Media`         | 0.1    | Entertainment — user is likely resting |
-   | `Other`         | 0.2    | Unrecognised label — conservative default |
+   | `IDE/Terminal`  | 0.7    | Intense focus work â€” high cognitive load |
+   | `Communication` | 0.6    | Meetings / email â€” sustained social pressure |
+   | `Document`      | 0.5    | Sustained writing effort â€” moderate load |
+   | `Browser`       | 0.3    | Research or distraction â€” ambiguous context |
+   | `Media`         | 0.1    | Entertainment â€” user is likely resting |
+   | `Other`         | 0.2    | Unrecognised label â€” conservative default |
 
    > **Architecture note:** `app_category` is written by the Flutter subprocess
    > using keyword-based Dart rules.  The Python `src/llm/classifier.py` module
-   > is available for offline re-classification only (see §Known Limitations).
+   > is available for offline re-classification only (see Â§Known Limitations).
    > Unrecognised category strings fall back to the `Other` weight.
 
-2. **Inactivity:** `1.0 − activity_pct / 100.0`
+2. **Inactivity:** `1.0 âˆ’ activity_pct / 100.0`
    Low keyboard/mouse activity while the session is running indicates
-   disengagement or task avoidance — an indirect stress signal.
+   disengagement or task avoidance â€” an indirect stress signal.
 
 3. **Attention fragmentation:** `min(1.0, total_window_switches / 20)`
-   20 window switches in a 5-minute window (≈ 4/min) maps to score 1.0.
+   20 window switches in a 5-minute window (â‰ˆ 4/min) maps to score 1.0.
    Frequent context-switching reflects difficulty sustaining focus.
 
 ---
@@ -313,13 +313,13 @@ notifier.send(
 **Purpose:** Export 5-minute aggregated data to Excel for statistical analysis.
 
 **Output:** `data/stress_analysis_{date}.xlsx` with sheets:
-- **Raw Physio** — all physio_readings
-- **Raw Face** — all face_readings
-- **Raw Desktop** — all desktop_readings
-- **5-Min Windows** — aggregated_windows (primary analysis sheet)
-- **Interventions** — all recommendations shown
-- **Correlations** — auto-computed correlation matrix between key variables
-- **Summary Stats** — descriptive statistics per variable
+- **Raw Physio** â€” all physio_readings
+- **Raw Face** â€” all face_readings
+- **Raw Desktop** â€” all desktop_readings
+- **5-Min Windows** â€” aggregated_windows (primary analysis sheet)
+- **Interventions** â€” all recommendations shown
+- **Correlations** â€” auto-computed correlation matrix between key variables
+- **Summary Stats** â€” descriptive statistics per variable
 
 **Usage:**
 ```bash
@@ -363,7 +363,7 @@ MIN_MINUTES_BETWEEN_NOTIFS  = 15
 
 # Ollama
 OLLAMA_MODEL   = "llama3.1:8b"
-OLLAMA_TIMEOUT = 2  # seconds
+OLLAMA_TIMEOUT = 30  # seconds; primary local LLM timeout
 
 # Paths
 BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -389,7 +389,7 @@ pip install ollama
 ```
 
 Ollama runs as a local server on http://localhost:11434.
-It uses the RTX 2060 Super automatically via CUDA.
+It can use CUDA automatically when a compatible NVIDIA GPU/PyTorch build is available; otherwise it falls back to CPU.
 
 ---
 
@@ -407,6 +407,80 @@ pip freeze > requirements.txt
 
 ---
 
+## 12. DeepEval LLM Evaluation
+
+**Files:** `src/evaluation/llm_evaluator.py`, `tests/test_evaluator.py`
+
+**Purpose:** Automated quality comparison of the two LLM recommendation models (Llama 3.1:8b vs Qwen 3.5:4b) using the DeepEval framework with a local judge model.
+
+### Judge model
+
+**Model:** `gemma4:12b` (pulled via Ollama, runs locally on the RTX 2060 Super)
+
+Gemma 4:12b acts as the evaluator: it receives the original prompt context, the model's recommendation, and a metric-specific rubric, then returns a 0â€“1 score with a reason string.
+
+```python
+# config.py
+OLLAMA_MODEL_JUDGE = "gemma4:12b"
+```
+
+### Metrics
+
+| Metric | What it measures | How scored |
+|--------|-----------------|------------|
+| **AnswerRelevancy** | Is the recommendation directly relevant to the stated stress/fatigue context- | Judge assesses topical fit to the input context |
+| **WellbeingAppropriateness** | Is the advice safe, supportive, and free of medical claims- | Judge checks tone, safety language, and absence of clinical instructions |
+| **ContextAwareness** | Does the recommendation reference specific context signals (app category, session duration, blink rate, etc.)- | Judge checks for concrete contextual anchors vs generic advice |
+
+Each metric returns a score in [0, 1]. The composite score is the unweighted average of all three.
+
+### Results
+
+Evaluation run across 6 matched intervention events (trigger: high_stress, same trigger context, both models queried):
+
+| Model | Overall score | Qualitative outcome | Avg latency |
+|---|---:|---|---:|
+| Llama 3.1:8b | **0.89** | 3/6 preferred outputs | ~5.3 s |
+| Qwen3.5:4b | **0.86** | 3/6 preferred outputs | ~13.1 s |
+
+The two models produced comparable qualitative results. Llama 3.1:8b was retained as the preferred real-time recommendation model due to substantially lower latency, while Qwen3.5:4b remains available for comparison/evaluation mode.
+
+**Key findings:**
+- Qwen scores ~3.5 percentage points higher on composite quality, primarily from stronger ContextAwareness (it tends to reference more specific signals from the prompt)
+- Llama is approximately **2.5Ã— faster** at inference, which is why it remains on the critical notification path
+- The sequential execution architecture (Llama â†’ notification delivered â†’ Qwen runs in background) means Qwen's higher latency has zero impact on user-perceived response time
+- Both models comfortably exceed 0.80 composite on WellbeingAppropriateness, confirming neither produces clinically unsafe or alarmist language
+
+### Architecture integration
+
+```
+Trigger detected
+    â”‚
+    â”œâ”€â–º Llama 3.1:8b  (ThreadPoolExecutor, _timeout=30s)
+    â”‚       â””â”€â–º _clean_response() â†’ Windows toast delivered  â† user sees this
+    â”‚
+    â””â”€â–º Qwen 3.5:4b   (daemon thread, sleep(2) GPU settle, _timeout=60s)
+            â””â”€â–º _extract_from_thinking() salvage if content empty
+                    â””â”€â–º _save_comparison_row() â†’ llm_comparisons table
+                                â””â”€â–º llm_evaluator.py reads this table post-hoc
+```
+
+**Schema â€” `llm_comparisons` table:**
+```sql
+CREATE TABLE llm_comparisons (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp        TEXT NOT NULL,
+    trigger_reason   TEXT,
+    context_json     TEXT,   -- full prompt context as JSON
+    llama_response   TEXT,
+    qwen_response    TEXT,
+    llama_latency_ms REAL,
+    qwen_latency_ms  REAL
+);
+```
+
+---
+
 ## Research questions (from thesis proposal)
 
 The original proposal included user-acceptance-oriented research questions. In the final thesis scope, the evaluation was reframed as a technical and functional proof-of-concept assessment. User acceptance, perceived privacy and intervention usefulness are therefore treated as limitations and future work.
@@ -417,7 +491,7 @@ The original proposal included user-acceptance-oriented research questions. In t
 
 The system is evaluated as a proof-of-concept through:
 
-- **Automated tests**: 75 unit and integration tests covering fusion logic, HRV validation, classifier accuracy, and aggregator behaviour (see `tests/`)
+- **Automated tests**: 99 unit and integration tests covering fusion logic, HRV validation, classifier accuracy, aggregator behaviour, and dual-model LLM comparison (see `tests/`)
 - **Functional demonstration**: end-to-end operation of all three modalities (rPPG, facial cues, desktop context) on a single workstation under realistic working conditions
 - **Data quality monitoring**: `data_health_check()` in `src/utils/db.py` reports row counts, signal quality, and per-modality coverage across a session
 - **Baseline personalisation**: single-user resting calibration validated against live session data via the `aggregated_windows` table
@@ -429,7 +503,8 @@ The system is evaluated as a proof-of-concept through:
 | Limitation | Detail |
 |------------|--------|
 | Desktop window classification | The Flutter subprocess (`src/desktop/lib/main.dart`) writes `app_category` to the database using keyword-based rules implemented in Dart. The compiled Flutter binary cannot call the Python Ollama client at runtime (cross-process, cross-language boundary). `src/llm/classifier.py` exists for offline re-classification of stored titles and for post-hoc thesis analysis, but is **not** invoked during live monitoring sessions. |
-| Roll° instability | The atan2 Euler decomposition is unstable at extreme pitch angles (±60°+). Roll° values in those regions are unreliable. |
-| LF/HF at short windows | Frequency-domain HRV requires ≥5 min of clean BVP signal. LF/HF is NULL early in each session. |
-| rPPG SQI under office lighting | Typical SQI is 0.35–0.50. HRV metrics are suppressed when SQI < 0.5. Stable frontal lighting improves quality. |
+| RollÂ° instability | The atan2 Euler decomposition is unstable at extreme pitch angles (Â±60Â°+). RollÂ° values in those regions are unreliable. |
+| LF/HF at short windows | Frequency-domain HRV requires â‰¥5 min of clean BVP signal. LF/HF is NULL early in each session. |
+| rPPG SQI under office lighting | Typical SQI is 0.35â€“0.50. HRV metrics are suppressed when SQI < 0.5. Stable frontal lighting improves quality. |
 | EmoNet-8 model files not in git | `data/models/emonet_8.pth` (~170 MB) and `data/models/emonet_arch.py` are excluded from the repository (`.gitignore`). They must be downloaded separately. VA inference degrades gracefully to `NULL` if the model is absent. |
+| Qwen 3.5:4b thinking-token exhaustion | Qwen 3.5:4b runs in an Ollama build that always allocates a thinking scratchpad before emitting content. With short `num_predict` budgets the model exhausts all tokens on internal reasoning and returns empty content. Three-layer suppression is applied in `src/llm/recommender.py`: (1) `/no_think\n\n` prefix on the user message, (2) `think: False` option in the Ollama chat API, and (3) `num_predict=512` + `num_ctx=4096`. Even with these measures the content field is occasionally empty; `_extract_from_thinking()` salvages the final recommendation from the thinking field as a fallback. |

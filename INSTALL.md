@@ -1,8 +1,8 @@
-# Installation Guide — Multimodal Stress Detection System
+# Installation Guide â€” Multimodal Stress Detection System
 
-**MSc Thesis — Dimitris Moforis · University of Piraeus, Dept. of Digital Systems**
+**MSc Thesis â€” Dimitris Moforis Â· University of Piraeus, Dept. of Digital Systems**
 
-This guide walks a new user through setting up the system from scratch on a Windows 10/11 machine. Follow the steps in order. Estimated total time: 30–60 minutes (most of which is download time).
+This guide walks a new user through setting up the system from scratch on a Windows 10/11 machine. Follow the steps in order. Estimated total time: 30â€“60 minutes (most of which is download time).
 
 ---
 
@@ -15,27 +15,27 @@ Install the following tools before beginning. All are free.
 | **Python** | 3.12 (exact) | [python.org/downloads](https://www.python.org/downloads/) |
 | **Git** | any recent | [git-scm.com/download/win](https://git-scm.com/download/win) |
 | **Flutter SDK** | 3.x stable | [docs.flutter.dev/get-started/install/windows](https://docs.flutter.dev/get-started/install/windows) |
-| **Visual Studio** | 2022 or later | [visualstudio.microsoft.com](https://visualstudio.microsoft.com/) — select the **"Desktop development with C++"** workload during installation |
+| **Visual Studio** | 2022 or later | [visualstudio.microsoft.com](https://visualstudio.microsoft.com/) â€” select the **"Desktop development with C++"** workload during installation |
 | **Ollama** | latest | [ollama.com/download](https://ollama.com/download) |
 
 > **GPU note:** An NVIDIA GPU (GTX 1060 or better) is strongly recommended. The EmoNet-8 valence-arousal model and Llama 3.1 8B both run on CPU if no CUDA-capable GPU is present, but inference will be noticeably slower. The rPPG module runs on CPU regardless.
 
 ---
 
-## Step 1 — Clone the repository
+## Step 1 â€” Clone the repository
 
 Open **PowerShell** and run:
 
 ```powershell
-git clone https://github.com/DMoforis/multimodal-info-system-stress-detection.git
-cd multimodal-info-system-stress-detection
+git clone https://github.com/DMoforis/msc-thesis.git
+cd msc-thesis
 ```
 
 > If you received the project as a ZIP archive instead, extract it and `cd` into the extracted folder.
 
 ---
 
-## Step 2 — Python environment setup
+## Step 2 â€” Python environment setup
 
 Create an isolated virtual environment and install all dependencies:
 
@@ -55,20 +55,20 @@ If you have an NVIDIA RTX/GTX card, replace the CPU-only PyTorch from `requireme
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
-Skip this step on machines without a CUDA-capable GPU — the CPU fallback installed by `requirements.txt` works correctly, just slower.
+Skip this step on machines without a CUDA-capable GPU â€” the CPU fallback installed by `requirements.txt` works correctly, just slower.
 
 ### Verify the installation
 
 ```powershell
-python -c "import cv2, mediapipe, torch; print('OK — torch:', torch.__version__, '| CUDA:', torch.cuda.is_available())"
+python -c "import cv2, mediapipe, torch; print('OK â€” torch:', torch.__version__, '| CUDA:', torch.cuda.is_available())"
 ```
 
-Expected output (GPU machine): `OK — torch: 2.x.x | CUDA: True`  
-Expected output (CPU machine): `OK — torch: 2.x.x | CUDA: False`
+Expected output (GPU machine): `OK â€” torch: 2.x.x | CUDA: True`
+Expected output (CPU machine): `OK â€” torch: 2.x.x | CUDA: False`
 
 ---
 
-## Step 3 — Build the Flutter desktop module
+## Step 3 â€” Build the Flutter desktop module
 
 The desktop context monitor is a native Windows application written in Flutter/Dart. It must be compiled once before first use; the compiled binary is not included in the repository.
 
@@ -93,7 +93,7 @@ src\desktop\build\windows\x64\runner\Release\desktop_monitor.exe
 
 ---
 
-## Step 4 — Set up Ollama and download the LLM
+## Step 4 â€” Set up Ollama and download the LLM
 
 Ollama manages the local large language model used for recommendation generation. Start it as a background service:
 
@@ -101,7 +101,7 @@ Ollama manages the local large language model used for recommendation generation
 ollama serve
 ```
 
-Keep this terminal window open. Then, in a **separate** terminal window, pull the required model (approximately 5 GB — downloaded once):
+Keep this terminal window open. Then, in a **separate** terminal window, pull the required model (approximately 5 GB â€” downloaded once):
 
 ```powershell
 ollama pull llama3.1:8b
@@ -122,12 +122,12 @@ ollama run llama3.1:8b "Say hello in one sentence"
 
 ---
 
-## Step 5 — First-time baseline calibration
+## Step 5 â€” First-time baseline calibration
 
 Before the first monitoring session, collect a two-minute resting baseline. This calibrates the stress scoring to your personal physiological resting state.
 
 1. Sit comfortably in front of the camera in your normal working position.
-2. Relax — do not type, move around, or speak.
+2. Relax â€” do not type, move around, or speak.
 3. Ensure your face is well-lit from the front.
 
 ```powershell
@@ -148,7 +148,7 @@ python src\utils\baseline.py --show
 
 ---
 
-## First Launch — Calibration and Initial Start
+## First Launch â€” Calibration and Initial Start
 
 > **One-time procedure only.** From the second launch onwards, skip straight to Step 6 and run `python dashboard.py --start-backend` directly.
 
@@ -164,7 +164,7 @@ If baseline calibration was not completed in Step 5, the dashboard will guide yo
 
 3. Click **"Begin Calibration"** and sit still with your face visible to the camera for the full 2-minute session.
 
-4. When calibration completes, **close the dashboard completely** — click the window's ✕ button or press **Ctrl+C** in the terminal.
+4. When calibration completes, **close the dashboard completely** â€” click the window's âœ• button or press **Ctrl+C** in the terminal.
 
 5. **Wait 5 seconds** for the camera to release fully.
 
@@ -176,19 +176,19 @@ If baseline calibration was not completed in Step 5, the dashboard will guide yo
 
 7. The system starts normally with your personal baseline active. The splash screen will not appear again.
 
-> **Why the restart?** The calibration module and the monitoring backend subprocess both require exclusive camera access. Closing and restarting the dashboard ensures the camera held by the calibration session is released before the backend subprocess acquires it.
+> **Why the restart-** The calibration module and the monitoring backend subprocess both require exclusive camera access. Closing and restarting the dashboard ensures the camera held by the calibration session is released before the backend subprocess acquires it.
 
 ---
 
-## Step 6 — Launch the system
+## Step 6 â€” Launch the system
 
-### Terminal 1 — Ollama (keep running throughout the session)
+### Terminal 1 â€” Ollama (keep running throughout the session)
 
 ```powershell
 ollama serve
 ```
 
-### Terminal 2 — System
+### Terminal 2 â€” System
 
 ```powershell
 # Activate the virtual environment first (if not already active)
@@ -200,7 +200,7 @@ python dashboard.py --start-backend
 
 This single command:
 1. Opens the **PyQt6 dashboard** (stress gauge, HR, valence-arousal scatter, trend graph, live camera feed, intervention log)
-2. Starts `run_all.py` as a background subprocess — the three modalities begin collecting data immediately
+2. Starts `run_all.py` as a background subprocess â€” the three modalities begin collecting data immediately
 3. Launches the Flutter desktop monitor headlessly in the background
 
 To close the system: click the dashboard's close button, or press **Ctrl+C** in the terminal. All background processes are terminated automatically.
@@ -227,7 +227,7 @@ python -c "import cv2; [print(i, cv2.VideoCapture(i).isOpened()) for i in range(
 
 If the system prints `[Recommender] Ollama error` or recommendations seem generic, Ollama is not reachable. Make sure `ollama serve` is running in a separate terminal before launching the system.
 
-The system continues working without Ollama — it falls back to keyword classification and template-based recommendations automatically.
+The system continues working without Ollama â€” it falls back to keyword classification and template-based recommendations automatically.
 
 ### Flutter window does not appear / no desktop data
 
@@ -245,15 +245,15 @@ Then confirm the executable exists:
 Test-Path src\desktop\build\windows\x64\runner\Release\desktop_monitor.exe
 ```
 
-### "No face data in dashboard" / RMSSD showing `—`
+### "No face data in dashboard" / RMSSD showing `â€”`
 
 - **No face data:** ensure there is good, even frontal lighting on your face. Avoid backlighting (bright window behind you). The rPPG signal requires a visible face region in every frame.
-- **RMSSD showing `—`:** normal for the first 5 minutes of each session. HRV metrics require a clean 5-minute rPPG signal. The `—` will be replaced with a value once the first HRV window completes.
-- **Heart rate showing `—`:** the system rejects readings outside 40–200 BPM as physiologically implausible. This is expected during the first 10 seconds while the rPPG signal accumulates. If it persists, ensure your face is well-lit and centred in the camera frame.
+- **RMSSD showing `â€”`:** normal for the first 5 minutes of each session. HRV metrics require a clean 5-minute rPPG signal. The `â€”` will be replaced with a value once the first HRV window completes.
+- **Heart rate showing `â€”`:** the system rejects readings outside 40â€“200 BPM as physiologically implausible. This is expected during the first 10 seconds while the rPPG signal accumulates. If it persists, ensure your face is well-lit and centred in the camera frame.
 
 ### Stress score seems too high or too low
 
-Re-run the baseline calibration (Step 5). The late fusion layer scores stress relative to your personal resting baseline — an incorrect baseline will shift all readings.
+Re-run the baseline calibration (Step 5). The late fusion layer scores stress relative to your personal resting baseline â€” an incorrect baseline will shift all readings.
 
 ### PyQt6 import error or missing packages
 
@@ -266,7 +266,7 @@ pip install -r requirements.txt
 
 ---
 
-## Optional — VS Code setup
+## Optional â€” VS Code setup
 
 The project is developed in VS Code. The following configuration gives the best experience.
 
@@ -301,11 +301,11 @@ Open `.vscode/settings.json` (or create it) and add:
 }
 ```
 
-With `"python.terminal.activateEnvironment": true`, VS Code automatically activates the virtual environment whenever you open a new terminal inside the project — no manual `Activate.ps1` needed.
+With `"python.terminal.activateEnvironment": true`, VS Code automatically activates the virtual environment whenever you open a new terminal inside the project â€” no manual `Activate.ps1` needed.
 
 ---
 
-## Quick reference — key commands
+## Quick reference â€” key commands
 
 ```powershell
 # Activate environment
@@ -325,5 +325,5 @@ python daily_summary.py                       # colour-coded daily summary
 python export_excel.py                        # export all data to Excel
 
 # Tests
-pytest tests/ -v                              # run all 75 tests
+pytest tests/ -v                              # run all 99 tests
 ```
